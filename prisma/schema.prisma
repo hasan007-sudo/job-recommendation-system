@@ -1,0 +1,154 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [pg_trgm, vector]
+}
+
+enum Seniority {
+  entry
+  mid
+  senior
+}
+
+enum SkillCategory {
+  language
+  framework
+  database
+  cloud
+  tool
+  concept
+}
+
+enum PlanStatus {
+  draft
+  verified
+  archived
+}
+
+enum RoundType {
+  recruiter_screen
+  oa
+  coding_dsa
+  frontend_ui
+  backend_design
+  system_design
+  hiring_manager
+  behavioral
+  team_fit
+}
+
+// A company that interview plans can be scoped to.
+// Plans with a null companyId are global defaults, not tied to any company.
+model Company {
+  id        String          @id @default(cuid())
+  name      String          @unique
+  createdAt DateTime        @default(now())
+  // 384-dim vector from Xenova/all-MiniLM-L6-v2; queried via $queryRaw.
+  embedding Unsupported("vector(384)")?
+  plans     InterviewPlan[]
+  sourceJobs SourceJob[]
+}
+
+// Normalized role + seniority pair, e.g. backend_engineer + entry.
+// Unique on [roleSlug, seniority] — one profile per role/level combination.
+model RoleProfile {
+  id          String             @id @default(cuid())
+  roleSlug    String
+  roleName    String
+  seniority   Seniority
+  description String?
+  // 384-dim vector from MiniLM; queried via $queryRaw.
+  embedding   Unsupported("vector(384)")?
+  skills      RoleProfileSkill[]
+  plans       InterviewPlan[]
+  sourceJobs  SourceJob[]
+
+  @@unique([roleSlug, seniority])
+}
+
+// Vocabulary of skills used for role detection and matching.
+model Skill {
+  id           String             @id @default(cuid())
+  name         String             @unique
+  category     SkillCategory
+  // 384-dim vector from MiniLM; queried via $queryRaw.
+  embedding    Unsupported("vector(384)")?
+  roleProfiles RoleProfileSkill[]
+}
+
+// Weighted link between a role profile and a skill.
+// Higher weight = stronger signal when scoring a candidate's skills against a role profile.
+// Used to detect the best-matching role profile before resolving an interview plan.
+model RoleProfileSkill {
+  id            String      @id @default(cuid())
+  roleProfileId String
+  skillId       String
+  weight        Float       @default(1)
+  roleProfile   RoleProfile @relation(fields: [roleProfileId], references: [id], onDelete: Cascade)
+  skill         Skill       @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([roleProfileId, skillId])
+}
+
+// One interview process for one role profile, optionally scoped to a company.
+// scopeKey = companyId for company-specific plans, "global" for defaults.
+// Resolution order: company-specific plan -> fallback to global plan for the same role profile.
+model InterviewPlan {
+  id               String           @id @default(cuid())
+  companyId        String?
+  roleProfileId    String
+  scopeKey         String
+  status           PlanStatus       @default(draft)
+  adminNotes       String?
+  // Denormalized count of attached InterviewRound rows.
+  // Kept in sync by a Postgres trigger (see prisma/db-init.sql).
+  cachedRoundCount Int              @default(0)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  company          Company?         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  roleProfile      RoleProfile      @relation(fields: [roleProfileId], references: [id], onDelete: Cascade)
+  rounds           InterviewRound[]
+
+  @@unique([scopeKey, roleProfileId])
+}
+
+// One ordered step inside an interview plan. position is 1-indexed.
+// Round count for a plan = COUNT(*) WHERE planId = plan.id.
+model InterviewRound {
+  id              String        @id @default(cuid())
+  planId          String
+  position        Int
+  roundType       RoundType
+  title           String
+  description     String?
+  durationMinutes Int?
+  plan            InterviewPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, position])
+}
+
+// Imported job row from the source DB. Read-only reference data.
+// Used to surface which roles exist at a given company so the UI can narrow choices.
+// Does not determine round count — only helps select the correct role profile before plan resolution.
+model SourceJob {
+  id                 String      @id @default(cuid())
+  companyId          String
+  roleProfileId      String
+  jobTitle           String
+  sourceRoleType     String?
+  requiredSkills     String?
+  experienceMinYears Int?
+  experienceMaxYears Int?
+  sourceSite         String?
+  sourceRowHash      String?     @unique
+  createdAt          DateTime    @default(now())
+  company            Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  roleProfile        RoleProfile @relation(fields: [roleProfileId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([roleProfileId])
+}
