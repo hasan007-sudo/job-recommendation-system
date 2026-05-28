@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { searchPlans } from "../../../lib/search";
+import { searchJobs } from "../../../lib/search";
 
 const schema = z.object({
   companyText: z.string().default(""),
@@ -15,6 +15,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid search input" }, { status: 400 });
   }
 
-  const cards = await searchPlans(parsed.data);
+  const cards = await searchJobs(parsed.data);
   return NextResponse.json({ cards });
 }

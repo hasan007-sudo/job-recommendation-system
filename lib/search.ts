@@ -1,23 +1,17 @@
-// 3-layer hybrid search: exact -> pg_trgm -> pgvector cosine.
-// Replaces the in-memory linear-scan resolver. Uses indexed SQL throughout.
+// Job-centric search: rank real scraped jobs by title (exact + trigram + semantic),
+// company, skills (ILIKE on requiredSkills text), and experience fit.
+// Rounds are parsed at read time from focusRoundPattern.
 
-import type { Seniority } from "@prisma/client";
 import { prisma } from "./prisma";
 import { embed, toPgVectorLiteral } from "./embeddings";
-import type { PlanCard } from "./types";
+import { parseRounds } from "./rounds";
+import type { JobCard, Seniority } from "./types";
 
-// Score weights. Tune these.
-const SCORE_WEIGHTS = {
-  company: 3,
-  role: 2,
-  seniority: 1.5,
-};
-
-const TRIGRAM_MIN = {
-  company: 0.4,
-  role: 0.35,
-  skill: 0.45,
-};
+const WEIGHTS = { title: 2.0, company: 1.5, skill: 1.0, experience: 0.5 };
+const TITLE_TRIGRAM_MIN = 0.3;
+const COMPANY_TRIGRAM_MIN = 0.4;
+const TITLE_CANDIDATES = 200;
+const RESULT_LIMIT = 30;
 
 function normalize(text: string): string {
   return text.trim().toLowerCase().replace(/[^a-z0-9\s+#./-]/g, "");
@@ -32,120 +26,70 @@ export function deriveSeniority(experienceYears: number | null): Seniority {
 
 type Match = { id: string; score: number };
 
-// ── Layered matchers ───────────────────────────────────────────────────────
-
-export async function matchCompany(text: string): Promise<Match[]> {
+// Title candidates: merge exact, trigram, and semantic (vector) tiers so a generic
+// query like "Software Engineer" also surfaces related real titles ("Associate Engineer").
+// Max score per job id wins; exact (1.0) floats to the top, semantic fills in the rest.
+async function matchTitle(text: string): Promise<Match[]> {
   const norm = normalize(text);
   if (!norm) return [];
 
-  // Layer 2: exact (case-insensitive)
-  const exact = await prisma.$queryRaw<Match[]>`
-    SELECT id, 1.0::float AS score FROM "Company"
-    WHERE lower(name) = ${norm}
-    LIMIT 5
-  `;
-  if (exact.length > 0) return exact;
+  const byId = new Map<string, number>();
+  const keepMax = (rows: Match[]) => {
+    for (const r of rows) {
+      const prev = byId.get(r.id) ?? 0;
+      if (r.score > prev) byId.set(r.id, r.score);
+    }
+  };
 
-  // Layer 3: pg_trgm
-  const trgm = await prisma.$queryRaw<Match[]>`
+  const exact = await prisma.$queryRaw<Match[]>`
+    SELECT id, 1.0::float AS score FROM "Job"
+    WHERE lower("jobTitle") = ${norm}
+    LIMIT ${TITLE_CANDIDATES}
+  `;
+  keepMax(exact);
+
+  const trigram = await prisma.$queryRaw<Match[]>`
+    SELECT id, similarity("jobTitle", ${text})::float AS score FROM "Job"
+    WHERE "jobTitle" % ${text} AND similarity("jobTitle", ${text}) >= ${TITLE_TRIGRAM_MIN}
+    ORDER BY score DESC
+    LIMIT ${TITLE_CANDIDATES}
+  `;
+  keepMax(trigram);
+
+  const vec = await embed(text);
+  const vecLit = toPgVectorLiteral(vec);
+  const ann = await prisma.$queryRaw<Match[]>`
+    SELECT id, (1 - (embedding <=> ${vecLit}::vector))::float AS score FROM "Job"
+    WHERE embedding IS NOT NULL
+    ORDER BY embedding <=> ${vecLit}::vector
+    LIMIT ${TITLE_CANDIDATES}
+  `;
+  keepMax(ann);
+
+  return Array.from(byId.entries()).map(([id, score]) => ({ id, score }));
+}
+
+// Company candidates: exact then trigram. No vector — company names are typed near-exact.
+async function matchCompanyIds(text: string): Promise<string[]> {
+  const norm = normalize(text);
+  if (!norm) return [];
+
+  const exact = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT id FROM "Company" WHERE lower(name) = ${norm} LIMIT 5
+  `;
+  if (exact.length > 0) return exact.map((r) => r.id);
+
+  const trigram = await prisma.$queryRaw<{ id: string; score: number }[]>`
     SELECT id, similarity(name, ${text})::float AS score FROM "Company"
     WHERE name % ${text}
     ORDER BY score DESC
     LIMIT 5
   `;
-  if (trgm.length > 0 && trgm[0].score >= TRIGRAM_MIN.company) return trgm;
-
-  // Layer 4: vector cosine
-  const vec = await embed(text);
-  const vecLit = toPgVectorLiteral(vec);
-  const ann = await prisma.$queryRaw<Match[]>`
-    SELECT id, (1 - (embedding <=> ${vecLit}::vector))::float AS score FROM "Company"
-    WHERE embedding IS NOT NULL
-    ORDER BY embedding <=> ${vecLit}::vector
-    LIMIT 5
-  `;
-  return ann;
-}
-
-type RoleMatch = { id: string; roleSlug: string; seniority: Seniority; score: number };
-
-export async function matchRoles(text: string): Promise<RoleMatch[]> {
-  const norm = normalize(text);
-  if (!norm) return [];
-
-  // Exact: roleSlug or roleName
-  const exact = await prisma.$queryRaw<RoleMatch[]>`
-    SELECT id, "roleSlug", seniority, 1.0::float AS score FROM "RoleProfile"
-    WHERE lower("roleSlug") = ${norm} OR lower("roleName") = ${norm}
-    LIMIT 10
-  `;
-  if (exact.length > 0) return exact;
-
-  const trgm = await prisma.$queryRaw<RoleMatch[]>`
-    SELECT id, "roleSlug", seniority, similarity("roleName", ${text})::float AS score
-    FROM "RoleProfile"
-    WHERE "roleName" % ${text}
-    ORDER BY score DESC
-    LIMIT 10
-  `;
-  if (trgm.length > 0 && trgm[0].score >= TRIGRAM_MIN.role) return trgm;
-
-  const vec = await embed(text);
-  const vecLit = toPgVectorLiteral(vec);
-  const ann = await prisma.$queryRaw<RoleMatch[]>`
-    SELECT id, "roleSlug", seniority, (1 - (embedding <=> ${vecLit}::vector))::float AS score
-    FROM "RoleProfile"
-    WHERE embedding IS NOT NULL
-    ORDER BY embedding <=> ${vecLit}::vector
-    LIMIT 10
-  `;
-  return ann;
-}
-
-export async function matchSkill(text: string): Promise<Match[]> {
-  const norm = normalize(text);
-  if (!norm) return [];
-
-  const exact = await prisma.$queryRaw<Match[]>`
-    SELECT id, 1.0::float AS score FROM "Skill"
-    WHERE lower(name) = ${norm}
-    LIMIT 3
-  `;
-  if (exact.length > 0) return exact;
-
-  const trgm = await prisma.$queryRaw<Match[]>`
-    SELECT id, similarity(name, ${text})::float AS score FROM "Skill"
-    WHERE name % ${text}
-    ORDER BY score DESC
-    LIMIT 3
-  `;
-  if (trgm.length > 0 && trgm[0].score >= TRIGRAM_MIN.skill) return trgm;
-
-  const vec = await embed(text);
-  const vecLit = toPgVectorLiteral(vec);
-  const ann = await prisma.$queryRaw<Match[]>`
-    SELECT id, (1 - (embedding <=> ${vecLit}::vector))::float AS score FROM "Skill"
-    WHERE embedding IS NOT NULL
-    ORDER BY embedding <=> ${vecLit}::vector
-    LIMIT 3
-  `;
-  return ann;
-}
-
-export async function matchSkills(texts: string[]): Promise<Match[]> {
-  const all = await Promise.all(texts.map((t) => matchSkill(t)));
-  // Dedupe by id, keep max score per skill.
-  const byId = new Map<string, number>();
-  for (const matches of all) {
-    for (const m of matches) {
-      const prev = byId.get(m.id) ?? 0;
-      if (m.score > prev) byId.set(m.id, m.score);
-    }
+  if (trigram.length > 0 && trigram[0].score >= COMPANY_TRIGRAM_MIN) {
+    return trigram.map((r) => r.id);
   }
-  return Array.from(byId.entries()).map(([id, score]) => ({ id, score }));
+  return [];
 }
-
-// ── Main search ─────────────────────────────────────────────────────────────
 
 export type SearchInput = {
   companyText: string;
@@ -155,130 +99,94 @@ export type SearchInput = {
 };
 
 type SearchRow = {
-  planId: string;
-  companyId: string | null;
-  companyName: string | null;
-  roleSlug: string;
-  roleName: string;
-  seniority: Seniority;
-  cachedRoundCount: number;
-  companyScore: number;
-  roleScore: number;
-  skillWeightSum: number;
-  seniorityBonus: number;
+  jobId: string;
+  jobTitle: string;
+  companyName: string;
+  experienceMinYears: number | null;
+  experienceMaxYears: number | null;
+  focusRoundPattern: string;
   totalScore: number;
 };
 
-export async function searchPlans(input: SearchInput): Promise<PlanCard[]> {
-  const seniority = deriveSeniority(input.experienceYears);
-
-  const [companyMatches, roleMatches, skillMatches] = await Promise.all([
-    input.companyText ? matchCompany(input.companyText) : Promise.resolve([] as Match[]),
-    input.roleText ? matchRoles(input.roleText) : Promise.resolve([] as RoleMatch[]),
-    input.skillNames.length > 0 ? matchSkills(input.skillNames) : Promise.resolve([] as Match[]),
+export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
+  const [titleMatches, companyIds] = await Promise.all([
+    input.roleText ? matchTitle(input.roleText) : Promise.resolve([] as Match[]),
+    input.companyText ? matchCompanyIds(input.companyText) : Promise.resolve([] as string[]),
   ]);
 
-  const companyIds = companyMatches.map((m) => m.id);
-  const companyScoreById = new Map(companyMatches.map((m) => [m.id, m.score]));
+  const skills = input.skillNames.map((s) => s.trim()).filter(Boolean);
 
-  // Build the set of candidate role IDs. If we got direct role matches, use them;
-  // otherwise fall back to skill-inferred roles (role profiles that link to any matched skill).
-  let roleIds = roleMatches.map((r) => r.id);
-  const roleScoreById = new Map(roleMatches.map((r) => [r.id, r.score]));
-
-  if (roleIds.length === 0 && skillMatches.length > 0) {
-    const skillIds = skillMatches.map((s) => s.id);
-    const inferred = await prisma.$queryRaw<{ id: string }[]>`
-      SELECT DISTINCT rp.id FROM "RoleProfile" rp
-      JOIN "RoleProfileSkill" rps ON rps."roleProfileId" = rp.id
-      WHERE rps."skillId" = ANY(${skillIds}::text[])
-    `;
-    roleIds = inferred.map((r) => r.id);
+  // Nothing to constrain on → don't dump the whole table.
+  if (titleMatches.length === 0 && companyIds.length === 0 && skills.length === 0) {
+    return [];
   }
 
-  // When no role/skill signal was provided, leave roleIds empty.
-  // The SQL filter below treats an empty array as "no role constraint" via cardinality()=0.
-  // Scoring + LIMIT 20 surfaces the relevant plans (e.g. company-matched ones float up).
+  const titleIds = titleMatches.map((m) => m.id);
+  const titleScores = titleMatches.map((m) => m.score);
 
-  const skillIds = skillMatches.map((s) => s.id);
-
-  // Single ranking query. Returns company-specific plans for matched companies
-  // PLUS global fallback plans, scored together.
   const rows = await prisma.$queryRaw<SearchRow[]>`
     SELECT
-      p.id AS "planId",
-      p."companyId",
+      j.id AS "jobId",
+      j."jobTitle",
       c.name AS "companyName",
-      rp."roleSlug",
-      rp."roleName",
-      rp.seniority,
-      p."cachedRoundCount",
-      COALESCE((
-        SELECT MAX(s.score) FROM (
-          SELECT unnest(${companyIds}::text[]) AS id,
-                 unnest(${companyMatches.map((m) => m.score)}::float[]) AS score
-        ) s WHERE s.id = p."companyId"
-      ), 0)::float AS "companyScore",
-      COALESCE((
-        SELECT MAX(s.score) FROM (
-          SELECT unnest(${roleMatches.map((r) => r.id)}::text[]) AS id,
-                 unnest(${roleMatches.map((r) => r.score)}::float[]) AS score
-        ) s WHERE s.id = rp.id
-      ), 0)::float AS "roleScore",
-      COALESCE((
-        SELECT SUM(rps.weight)::float FROM "RoleProfileSkill" rps
-        WHERE rps."roleProfileId" = rp.id AND rps."skillId" = ANY(${skillIds}::text[])
-      ), 0) AS "skillWeightSum",
-      CASE WHEN rp.seniority = ${seniority}::"Seniority" THEN ${SCORE_WEIGHTS.seniority}::float ELSE 0::float END AS "seniorityBonus",
+      j."experienceMinYears",
+      j."experienceMaxYears",
+      j."focusRoundPattern",
       (
-        COALESCE((
-          SELECT MAX(s.score) FROM (
-            SELECT unnest(${companyIds}::text[]) AS id,
-                   unnest(${companyMatches.map((m) => m.score)}::float[]) AS score
-          ) s WHERE s.id = p."companyId"
-        ), 0) * ${SCORE_WEIGHTS.company}::float
-        + COALESCE((
-          SELECT MAX(s.score) FROM (
-            SELECT unnest(${roleMatches.map((r) => r.id)}::text[]) AS id,
-                   unnest(${roleMatches.map((r) => r.score)}::float[]) AS score
-          ) s WHERE s.id = rp.id
-        ), 0) * ${SCORE_WEIGHTS.role}::float
-        + COALESCE((
-          SELECT SUM(rps.weight)::float FROM "RoleProfileSkill" rps
-          WHERE rps."roleProfileId" = rp.id AND rps."skillId" = ANY(${skillIds}::text[])
+        ${WEIGHTS.title}::float * COALESCE((
+          SELECT s.score FROM (
+            SELECT unnest(${titleIds}::text[]) AS id,
+                   unnest(${titleScores}::float[]) AS score
+          ) s WHERE s.id = j.id LIMIT 1
         ), 0)
-        + CASE WHEN rp.seniority = ${seniority}::"Seniority" THEN ${SCORE_WEIGHTS.seniority}::float ELSE 0::float END
+        + ${WEIGHTS.company}::float * (
+          CASE
+            WHEN cardinality(${companyIds}::text[]) > 0
+                 AND j."companyId" = ANY(${companyIds}::text[]) THEN 1.0
+            ELSE 0.0
+          END
+        )
+        + ${WEIGHTS.skill}::float * (
+          SELECT COUNT(*) FROM unnest(${skills}::text[]) sk
+          WHERE length(regexp_replace(lower(btrim(sk)), '[^a-z0-9]', '', 'g')) > 0
+            AND EXISTS (
+              SELECT 1
+              FROM regexp_split_to_table(COALESCE(j."requiredSkills", ''), '[,;|]') AS tok
+              WHERE regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g')
+                LIKE '%' || regexp_replace(lower(btrim(sk)), '[^a-z0-9]', '', 'g') || '%'
+            )
+        )::float
+        + ${WEIGHTS.experience}::float * (
+          CASE
+            WHEN ${input.experienceYears}::int IS NULL THEN 0
+            WHEN ${input.experienceYears}::int BETWEEN COALESCE(j."experienceMinYears", 0)
+                                                   AND COALESCE(j."experienceMaxYears", 99) THEN 1.0
+            ELSE 0.0
+          END
+        )
       )::float AS "totalScore"
-    FROM "InterviewPlan" p
-    LEFT JOIN "Company" c ON p."companyId" = c.id
-    JOIN "RoleProfile" rp ON p."roleProfileId" = rp.id
-    WHERE p.status = 'verified'
-      AND (
-        rp.id = ANY(${roleIds}::text[])
-        OR cardinality(${roleIds}::text[]) = 0
-      )
-      AND (
-        p."companyId" IS NULL
-        OR p."companyId" = ANY(${companyIds}::text[])
-        OR cardinality(${companyIds}::text[]) = 0
-      )
-    ORDER BY "totalScore" DESC, p."createdAt" ASC
-    LIMIT 20
+    FROM "Job" j
+    JOIN "Company" c ON c.id = j."companyId"
+    WHERE (cardinality(${titleIds}::text[]) = 0 OR j.id = ANY(${titleIds}::text[]))
+      AND (cardinality(${companyIds}::text[]) = 0 OR j."companyId" = ANY(${companyIds}::text[]))
+    ORDER BY "totalScore" DESC, j."createdAt" ASC
+    LIMIT ${RESULT_LIMIT}
   `;
 
-  return rows.map((row) => ({
-    planId: row.planId,
-    companyName: row.companyName,
-    roleName: row.roleName,
-    roleSlug: row.roleSlug,
-    seniority: row.seniority,
-    roundCount: Number(row.cachedRoundCount),
-    score: Number(row.totalScore),
-    components: {
-      company: Number(row.companyScore),
-      role: Number(row.roleScore),
-      skill: Number(row.skillWeightSum),
-      seniority: Number(row.seniorityBonus),
-    },
-  }));
+  return rows
+    .filter((row) => Number(row.totalScore) > 0)
+    .map((row) => {
+      const rounds = parseRounds(row.focusRoundPattern);
+      return {
+        jobId: row.jobId,
+        jobTitle: row.jobTitle,
+        companyName: row.companyName,
+        seniority: deriveSeniority(row.experienceMinYears),
+        experienceMinYears: row.experienceMinYears,
+        experienceMaxYears: row.experienceMaxYears,
+        roundCount: rounds.length,
+        rounds,
+        score: Number(row.totalScore),
+      };
+    });
 }

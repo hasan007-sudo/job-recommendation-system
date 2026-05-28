@@ -1,3 +1,10 @@
+/* Tailwind v4 — theme + utilities only (preflight omitted so the existing
+   plain-CSS pages are not affected by a global reset). Utilities are used by
+   the /onboarding route. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
 :root {
   --background: #fafaf8;
   --foreground: #111111;
@@ -266,6 +273,26 @@ label span {
 .muted {
   color: var(--muted);
   line-height: 1.5;
+}
+
+.search-loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.search-loader .spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .ui-badge {

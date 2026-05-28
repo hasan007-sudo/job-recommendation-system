@@ -1,48 +1,26 @@
--- Idempotent Postgres initialization for the rounds prototype.
+-- Idempotent Postgres initialization for the job-centric search.
 -- Run with: bunx prisma db execute --file prisma/db-init.sql --schema prisma/schema.prisma
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Layer 3 (trigram) indexes
+-- Fuzzy text matching (GIN trigram: `%` set-membership + similarity()).
+CREATE INDEX IF NOT EXISTS job_title_trgm
+  ON "Job" USING GIN ("jobTitle" gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS job_skills_trgm
+  ON "Job" USING GIN ("requiredSkills" gin_trgm_ops);
+
 CREATE INDEX IF NOT EXISTS company_name_trgm
   ON "Company" USING GIN (name gin_trgm_ops);
 
-CREATE INDEX IF NOT EXISTS roleprofile_name_trgm
-  ON "RoleProfile" USING GIN ("roleName" gin_trgm_ops);
+-- Semantic title match: HNSW cosine ANN over the 384-dim composite embedding.
+CREATE INDEX IF NOT EXISTS job_embedding_hnsw
+  ON "Job" USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 
-CREATE INDEX IF NOT EXISTS skill_name_trgm
-  ON "Skill" USING GIN (name gin_trgm_ops);
+-- DB-level dedup: one Job per (company, case-folded title). companyId lives on the row.
+ALTER TABLE "Job"
+  ADD COLUMN IF NOT EXISTS dedup_key text
+  GENERATED ALWAYS AS ("companyId" || '|' || lower(btrim("jobTitle"))) STORED;
 
--- Layer 4 (vector ANN) indexes. HNSW for cosine distance.
-CREATE INDEX IF NOT EXISTS company_embedding_hnsw
-  ON "Company" USING hnsw (embedding vector_cosine_ops);
-
-CREATE INDEX IF NOT EXISTS roleprofile_embedding_hnsw
-  ON "RoleProfile" USING hnsw (embedding vector_cosine_ops);
-
-CREATE INDEX IF NOT EXISTS skill_embedding_hnsw
-  ON "Skill" USING hnsw (embedding vector_cosine_ops);
-
--- Trigger that keeps InterviewPlan.cachedRoundCount in sync with InterviewRound.
-CREATE OR REPLACE FUNCTION update_plan_round_count() RETURNS TRIGGER AS $$
-BEGIN
-  IF TG_OP = 'INSERT' THEN
-    UPDATE "InterviewPlan"
-       SET "cachedRoundCount" = "cachedRoundCount" + 1
-     WHERE id = NEW."planId";
-    RETURN NEW;
-  ELSIF TG_OP = 'DELETE' THEN
-    UPDATE "InterviewPlan"
-       SET "cachedRoundCount" = GREATEST("cachedRoundCount" - 1, 0)
-     WHERE id = OLD."planId";
-    RETURN OLD;
-  END IF;
-  RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS round_count_trigger ON "InterviewRound";
-CREATE TRIGGER round_count_trigger
-  AFTER INSERT OR DELETE ON "InterviewRound"
-  FOR EACH ROW EXECUTE FUNCTION update_plan_round_count();
+CREATE UNIQUE INDEX IF NOT EXISTS job_dedup_key_uniq ON "Job" (dedup_key);

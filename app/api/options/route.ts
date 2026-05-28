@@ -1,21 +1,24 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
 
+type SkillRow = { name: string };
+
 export async function GET() {
-  const [companies, roles, skills] = await Promise.all([
+  const [companies, skillRows] = await Promise.all([
     prisma.company.findMany({ orderBy: { name: "asc" } }),
-    prisma.roleProfile.findMany({ orderBy: [{ roleName: "asc" }, { seniority: "asc" }] }),
-    prisma.skill.findMany({ orderBy: { name: "asc" } }),
+    // Skill suggestions = distinct tokens from every job's requiredSkills text.
+    prisma.$queryRaw<SkillRow[]>`
+      SELECT lower(btrim(s)) AS name, COUNT(*) AS n
+      FROM "Job", regexp_split_to_table("requiredSkills", '[,;|]') AS s
+      WHERE "requiredSkills" IS NOT NULL AND length(btrim(s)) >= 2
+      GROUP BY lower(btrim(s))
+      ORDER BY n DESC
+      LIMIT 300
+    `,
   ]);
 
   return NextResponse.json({
-    companies,
-    roles: roles.map((role) => ({
-      id: role.id,
-      role_slug: role.roleSlug,
-      role_name: role.roleName,
-      seniority: role.seniority,
-    })),
-    skills,
+    companies: companies.map((company) => ({ id: company.id, name: company.name })),
+    skills: skillRows.map((row) => ({ name: row.name })),
   });
 }

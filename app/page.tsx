@@ -1,40 +1,35 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { Loader2, Search } from "lucide-react";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 
 type Company = { id: string; name: string };
-type Skill = { id: string; name: string; category: string };
+type Skill = { name: string };
 
-type PlanCard = {
-  planId: string;
-  companyName: string | null;
-  roleName: string;
-  roleSlug: string;
+type Round = { position: number; slug: string; title: string };
+
+type JobCard = {
+  jobId: string;
+  jobTitle: string;
+  companyName: string;
   seniority: string;
+  experienceMinYears: number | null;
+  experienceMaxYears: number | null;
   roundCount: number;
+  rounds: Round[];
   score: number;
 };
 
-type PlanDetail = {
-  planId: string;
-  companyName: string | null;
-  roleName: string;
-  seniority: string;
-  roundCount: number;
-  rounds: {
-    id: string;
-    position: number;
-    roundType: string;
-    title: string;
-    description: string | null;
-    durationMinutes: number | null;
-  }[];
-};
+function formatExperience(min: number | null, max: number | null): string | null {
+  if (min === null && max === null) return null;
+  if (min !== null && max !== null) return `${min}–${max} yrs`;
+  if (min !== null) return `${min}+ yrs`;
+  return `up to ${max} yrs`;
+}
 
 export default function HomePage() {
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -44,10 +39,8 @@ export default function HomePage() {
   const [experienceYears, setExperienceYears] = useState("");
   const [skillNames, setSkillNames] = useState<string[]>([]);
   const [skillSearch, setSkillSearch] = useState("");
-  const [cards, setCards] = useState<PlanCard[] | null>(null);
-  const [openPlanIds, setOpenPlanIds] = useState<Set<string>>(new Set());
-  const [details, setDetails] = useState<Map<string, PlanDetail>>(new Map());
-  const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
+  const [cards, setCards] = useState<JobCard[] | null>(null);
+  const [openJobIds, setOpenJobIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -61,7 +54,7 @@ export default function HomePage() {
         setCompanies(data.companies);
         setSkills(data.skills);
       })
-      .catch(() => setError("Connect the database and seed data to load options."));
+      .catch(() => setError("Connect the database and import jobs to load options."));
   }, []);
 
   const companyOptions = useMemo(() => companies.map((company) => company.name), [companies]);
@@ -70,11 +63,7 @@ export default function HomePage() {
     const query = skillSearch.trim().toLowerCase();
     if (query === "") return [];
     return skills
-      .filter(
-        (skill) =>
-          !skillNames.includes(skill.name) &&
-          skill.name.toLowerCase().includes(query)
-      )
+      .filter((skill) => !skillNames.includes(skill.name) && skill.name.toLowerCase().includes(query))
       .slice(0, 8);
   }, [skills, skillNames, skillSearch]);
 
@@ -86,21 +75,36 @@ export default function HomePage() {
     });
   }
 
-  async function search() {
+  // Add a free-typed skill (may not exist in the suggestion list). Deduped case-insensitively.
+  function addSkill(raw: string) {
+    const name = raw.trim();
+    if (!name) return;
+    setSkillNames((current) =>
+      current.some((s) => s.toLowerCase() === name.toLowerCase()) ? current : [...current, name]
+    );
+    setSkillSearch("");
+  }
+
+  const trimmedSkill = skillSearch.trim();
+  const canAddCustomSkill =
+    trimmedSkill !== "" &&
+    !skillNames.some((s) => s.toLowerCase() === trimmedSkill.toLowerCase()) &&
+    !filteredSkills.some((s) => s.name.toLowerCase() === trimmedSkill.toLowerCase());
+
+  async function runSearch(input: {
+    companyText: string;
+    roleText: string;
+    skillNames: string[];
+    experienceYears: number | null;
+  }) {
     setLoading(true);
     setError("");
-    setOpenPlanIds(new Set());
-    setDetails(new Map());
+    setOpenJobIds(new Set());
     try {
       const response = await fetch("/api/search", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          companyText,
-          roleText,
-          skillNames,
-          experienceYears: experienceYears === "" ? null : Number(experienceYears),
-        }),
+        body: JSON.stringify(input),
       });
       const data = await response.json();
       setCards(data.cards ?? []);
@@ -111,34 +115,44 @@ export default function HomePage() {
     }
   }
 
-  async function toggleCard(planId: string) {
-    // Closing
-    if (openPlanIds.has(planId)) {
-      setOpenPlanIds((current) => {
-        const next = new Set(current);
-        next.delete(planId);
-        return next;
-      });
-      return;
-    }
-    // Opening — add to open set immediately so card expands
-    setOpenPlanIds((current) => new Set(current).add(planId));
-    // Fetch detail only if we don't have it cached already
-    if (details.has(planId)) return;
-    setLoadingIds((current) => new Set(current).add(planId));
+  function search() {
+    runSearch({
+      companyText,
+      roleText,
+      skillNames,
+      experienceYears: experienceYears === "" ? null : Number(experienceYears),
+    });
+  }
+
+  // Arriving from /onboarding: prefill the form from the derived search input and run it once.
+  useEffect(() => {
+    const raw = sessionStorage.getItem("rounds:autosearch");
+    if (!raw) return;
+    sessionStorage.removeItem("rounds:autosearch");
     try {
-      const response = await fetch(`/api/plan/${planId}`);
-      const data = await response.json();
-      setDetails((current) => new Map(current).set(planId, data));
-    } catch {
-      setError("Could not load plan detail.");
-    } finally {
-      setLoadingIds((current) => {
-        const next = new Set(current);
-        next.delete(planId);
-        return next;
+      const input = JSON.parse(raw);
+      setCompanyText(input.companyText ?? "");
+      setRoleText(input.roleText ?? "");
+      setSkillNames(Array.isArray(input.skillNames) ? input.skillNames : []);
+      setExperienceYears(input.experienceYears == null ? "" : String(input.experienceYears));
+      runSearch({
+        companyText: input.companyText ?? "",
+        roleText: input.roleText ?? "",
+        skillNames: Array.isArray(input.skillNames) ? input.skillNames : [],
+        experienceYears: input.experienceYears ?? null,
       });
+    } catch {
+      // ignore malformed payload
     }
+  }, []);
+
+  function toggleCard(jobId: string) {
+    setOpenJobIds((current) => {
+      const next = new Set(current);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
   }
 
   return (
@@ -152,7 +166,7 @@ export default function HomePage() {
                 list="company-options"
                 value={companyText}
                 onChange={(event) => setCompanyText(event.target.value)}
-                placeholder="e.g. Google, Stripe, Freshworks"
+                placeholder="e.g. Google, Accenture, Trimble"
               />
               <datalist id="company-options">
                 {companyOptions.map((company) => (
@@ -166,7 +180,7 @@ export default function HomePage() {
               <Input
                 value={roleText}
                 onChange={(event) => setRoleText(event.target.value)}
-                placeholder="e.g. SDE, Senior Software Engineer, ML"
+                placeholder="e.g. Software Engineer, Data Engineer, ML"
               />
             </label>
 
@@ -187,7 +201,13 @@ export default function HomePage() {
               <Input
                 value={skillSearch}
                 onChange={(event) => setSkillSearch(event.target.value)}
-                placeholder="Search skills e.g. React, Node.js..."
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addSkill(skillSearch);
+                  }
+                }}
+                placeholder="Search or type a skill, press Enter to add"
               />
               {skillNames.length > 0 && (
                 <div className="skill-bank">
@@ -203,11 +223,11 @@ export default function HomePage() {
                   ))}
                 </div>
               )}
-              {filteredSkills.length > 0 && (
+              {(filteredSkills.length > 0 || canAddCustomSkill) && (
                 <div className="skill-bank">
                   {filteredSkills.map((skill) => (
                     <Button
-                      key={skill.id}
+                      key={skill.name}
                       className="skill"
                       variant="outline"
                       onClick={() => toggleSkill(skill.name)}
@@ -215,6 +235,15 @@ export default function HomePage() {
                       {skill.name}
                     </Button>
                   ))}
+                  {canAddCustomSkill && (
+                    <Button
+                      className="skill"
+                      variant="outline"
+                      onClick={() => addSkill(skillSearch)}
+                    >
+                      + Add &ldquo;{trimmedSkill}&rdquo;
+                    </Button>
+                  )}
                 </div>
               )}
             </label>
@@ -231,42 +260,40 @@ export default function HomePage() {
 
       <Card className="result-card">
         <CardContent>
-          {cards === null && <p className="muted">Results will appear here as cards.</p>}
-          {cards && cards.length === 0 && <p>No matches found. Try broader inputs.</p>}
-          {cards && cards.length > 0 && (
+          {loading && (
+            <div className="search-loader">
+              <Loader2 size={22} className="spin" />
+              <span>Searching jobs…</span>
+            </div>
+          )}
+          {!loading && cards === null && <p className="muted">Results will appear here as cards.</p>}
+          {!loading && cards && cards.length === 0 && <p>No matches found. Try broader inputs.</p>}
+          {!loading && cards && cards.length > 0 && (
             <div className="card-grid">
               {cards.map((card) => {
-                const isOpen = openPlanIds.has(card.planId);
-                const isLoading = loadingIds.has(card.planId);
-                const detail = details.get(card.planId);
+                const isOpen = openJobIds.has(card.jobId);
+                const experience = formatExperience(card.experienceMinYears, card.experienceMaxYears);
                 return (
-                  <div key={card.planId} className={isOpen ? "plan-card is-open" : "plan-card"}>
-                    <button className="plan-card-header" onClick={() => toggleCard(card.planId)}>
+                  <div key={card.jobId} className={isOpen ? "plan-card is-open" : "plan-card"}>
+                    <button className="plan-card-header" onClick={() => toggleCard(card.jobId)}>
                       <div className="plan-card-titles">
-                        <p className="plan-card-company">{card.companyName ?? "Any company"}</p>
+                        <p className="plan-card-company">{card.jobTitle}</p>
                         <p className="plan-card-role">
-                          {card.roleName} · <span className="muted">{card.seniority}</span>
+                          {card.companyName} · <span className="muted">{card.seniority}</span>
+                          {experience ? <span className="muted"> · {experience}</span> : null}
                         </p>
                       </div>
                       <Badge className="round-badge">{card.roundCount} rounds</Badge>
                     </button>
                     {isOpen && (
                       <div className="plan-card-detail">
-                        {isLoading && !detail && <p className="muted">Loading rounds…</p>}
-                        {detail && (
-                          <ol className="rounds">
-                            {detail.rounds.map((round) => (
-                              <li key={round.id}>
-                                <strong>{round.title}</strong>
-                                <span>
-                                  {round.roundType}
-                                  {round.durationMinutes ? ` · ${round.durationMinutes} min` : ""}
-                                </span>
-                                {round.description && <p>{round.description}</p>}
-                              </li>
-                            ))}
-                          </ol>
-                        )}
+                        <ol className="rounds">
+                          {card.rounds.map((round) => (
+                            <li key={round.position}>
+                              <strong>{round.title}</strong>
+                            </li>
+                          ))}
+                        </ol>
                       </div>
                     )}
                   </div>
