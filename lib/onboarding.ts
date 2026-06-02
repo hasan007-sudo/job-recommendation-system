@@ -14,6 +14,9 @@ export type OnboardingProfile = {
   scores: { cgpa: string; twelfth: string; tenth: string };
   roleHint: string;
   experienceYears: number;
+  // Compact text used as the resume side of the embedding similarity match.
+  // Built at parse time from skills + experience + roleHint.
+  resumeText: string;
 };
 
 export const EMPTY_PROFILE: OnboardingProfile = {
@@ -24,6 +27,7 @@ export const EMPTY_PROFILE: OnboardingProfile = {
   scores: { cgpa: "", twelfth: "", tenth: "" },
   roleHint: "",
   experienceYears: 0,
+  resumeText: "",
 };
 
 // Build the input for the existing job search from an (edited) profile.

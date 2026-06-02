@@ -153,7 +153,22 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
     scores: { cgpa: edu?.cgpa != null ? String(edu.cgpa) : "", twelfth: "", tenth: "" },
     roleHint: parsed.strongest_domain ?? parsed.work_experience[0]?.role ?? "",
     experienceYears: Math.max(0, Math.round(parsed.experience_years ?? 0)),
+    resumeText: buildResumeText(parsed),
   };
+}
+
+function buildResumeText(parsed: ParsedResume): string {
+  const roleHint = parsed.strongest_domain ?? parsed.work_experience[0]?.role ?? "";
+  const skills = dedupe(parsed.skills.map((s) => s.trim()).filter(Boolean));
+  const projects = parsed.projects
+    .filter((p) => p.name)
+    .map((p) => (p.description ? `${p.name}: ${p.description}` : (p.name as string)));
+  const work = parsed.work_experience
+    .filter((w) => w.role || w.company)
+    .map((w) => [w.role, w.company].filter(Boolean).join(" at "));
+  return [roleHint, skills.join(", "), work.join(". "), projects.join(". ")]
+    .filter((s) => s && s.trim())
+    .join("\n");
 }
 
 function dedupe(items: string[]): string[] {

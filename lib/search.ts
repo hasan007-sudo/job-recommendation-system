@@ -10,11 +10,14 @@ import type { JobCard, Seniority } from "./types";
 const WEIGHTS = { title: 2.0, company: 1.5, skill: 1.0, experience: 0.5 };
 const TITLE_TRIGRAM_MIN = 0.3;
 const COMPANY_TRIGRAM_MIN = 0.4;
-const TITLE_CANDIDATES = 200;
+const TITLE_CANDIDATES = 20;
 const RESULT_LIMIT = 30;
 
 function normalize(text: string): string {
-  return text.trim().toLowerCase().replace(/[^a-z0-9\s+#./-]/g, "");
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s+#./-]/g, "");
 }
 
 export function deriveSeniority(experienceYears: number | null): Seniority {
@@ -110,14 +113,22 @@ type SearchRow = {
 
 export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
   const [titleMatches, companyIds] = await Promise.all([
-    input.roleText ? matchTitle(input.roleText) : Promise.resolve([] as Match[]),
-    input.companyText ? matchCompanyIds(input.companyText) : Promise.resolve([] as string[]),
+    input.roleText
+      ? matchTitle(input.roleText)
+      : Promise.resolve([] as Match[]),
+    input.companyText
+      ? matchCompanyIds(input.companyText)
+      : Promise.resolve([] as string[]),
   ]);
 
   const skills = input.skillNames.map((s) => s.trim()).filter(Boolean);
 
   // Nothing to constrain on → don't dump the whole table.
-  if (titleMatches.length === 0 && companyIds.length === 0 && skills.length === 0) {
+  if (
+    titleMatches.length === 0 &&
+    companyIds.length === 0 &&
+    skills.length === 0
+  ) {
     return [];
   }
 

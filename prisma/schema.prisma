@@ -36,6 +36,10 @@ model Job {
   // ';'-separated "Name - description" detail, kept for round descriptions.
   focusRounds       String?
 
+  // Cached LLM-derived core competencies for this JD. JSON string:
+  // { "groups": [{ "name": string, "items": [{ "title": string, "description": string }] }] }
+  competencies      String?
+
   experienceMinYears  Int?
   experienceMaxYears  Int?
   salaryInrMinPerYear Int?
