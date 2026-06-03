@@ -19,9 +19,14 @@ type JobCard = {
   roundCount: number;
   rounds: ParsedRound[];
   score: number | null;
+  skillsPct: number | null;
+  projectsPct: number | null;
+  roleOrCompanyMatched: boolean;
   matchedSkills: number | null;
   totalSkills: number;
 };
+
+type SortMode = "default" | "score";
 
 const EXP_OPTIONS: { label: string; value: string }[] = [
   { label: "Any", value: "" },
@@ -45,7 +50,10 @@ export default function HomePage() {
   const [skillNames, setSkillNames] = useState<string[]>([]);
   const [skillSearch, setSkillSearch] = useState("");
   const [roleText, setRoleText] = useState<string>("");
+  const [companyText, setCompanyText] = useState<string>("");
   const [experienceYears, setExperienceYears] = useState<string>("");
+  const [projectText, setProjectText] = useState<string>("");
+  const [sort, setSort] = useState<SortMode>("default");
   const [cards, setCards] = useState<JobCard[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -70,6 +78,7 @@ export default function HomePage() {
         if (p.roleHint) setRoleText(p.roleHint);
         if (p.experienceYears != null)
           setExperienceYears(String(p.experienceYears));
+        if (p.projects?.length) setProjectText(p.projects.join(". "));
       } catch {
         // ignore
       }
@@ -81,12 +90,19 @@ export default function HomePage() {
       try {
         const input = JSON.parse(auto);
         const skills = Array.isArray(input.skillNames) ? input.skillNames : [];
+        const autoProjectText =
+          typeof input.projectText === "string" ? input.projectText : "";
+        const autoSort: SortMode = input.sort === "score" ? "score" : "default";
         setSkillNames(skills);
+        setProjectText(autoProjectText);
+        setSort(autoSort);
         runSearch({
           companyText: "",
           roleText: input.roleText ?? "",
           skillNames: skills,
           experienceYears: input.experienceYears ?? null,
+          projectText: autoProjectText,
+          sort: autoSort,
         });
         return;
       } catch {
@@ -99,6 +115,7 @@ export default function HomePage() {
       try {
         const f = JSON.parse(cachedFilters);
         if (typeof f.roleText === "string") setRoleText(f.roleText);
+        if (typeof f.companyText === "string") setCompanyText(f.companyText);
         if (Array.isArray(f.skillNames)) setSkillNames(f.skillNames);
         if (typeof f.experienceYears === "string")
           setExperienceYears(f.experienceYears);
@@ -146,6 +163,8 @@ export default function HomePage() {
     roleText: string;
     skillNames: string[];
     experienceYears: number | null;
+    projectText: string;
+    sort: SortMode;
   }) {
     setLoading(true);
     setError("");
@@ -163,6 +182,7 @@ export default function HomePage() {
         "rounds:filters",
         JSON.stringify({
           roleText: input.roleText,
+          companyText: input.companyText,
           skillNames: input.skillNames,
           experienceYears:
             input.experienceYears == null ? "" : String(input.experienceYears),
@@ -177,10 +197,26 @@ export default function HomePage() {
 
   function updateResults() {
     runSearch({
-      companyText: "",
+      companyText,
       roleText,
       skillNames,
       experienceYears: experienceYears === "" ? null : Number(experienceYears),
+      projectText,
+      sort,
+    });
+  }
+
+  // Re-run the search under a new sort mode (sorting happens server-side).
+  function changeSort(next: SortMode) {
+    if (next === sort) return;
+    setSort(next);
+    runSearch({
+      companyText,
+      roleText,
+      skillNames,
+      experienceYears: experienceYears === "" ? null : Number(experienceYears),
+      projectText,
+      sort: next,
     });
   }
 
@@ -223,6 +259,15 @@ export default function HomePage() {
                   value={roleText}
                   onChange={(e) => setRoleText(e.target.value)}
                   placeholder="e.g. Frontend Engineer, SDE"
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[14px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
+                />
+              </Field>
+
+              <Field label="Company">
+                <input
+                  value={companyText}
+                  onChange={(e) => setCompanyText(e.target.value)}
+                  placeholder="e.g. Google, Razorpay"
                   className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[14px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
                 />
               </Field>
@@ -321,6 +366,30 @@ export default function HomePage() {
                   ? "Run a search"
                   : `${matchCount} MATCHING ROLES`}
               </h2>
+              {cards && cards.length > 0 && (
+                <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-0.5">
+                  {(
+                    [
+                      ["default", "Best match"],
+                      ["score", "Match score"],
+                    ] as [SortMode, string][]
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      onClick={() => changeSort(value)}
+                      disabled={loading}
+                      className={
+                        "rounded-md px-3 py-1.5 text-[12px] font-semibold transition disabled:opacity-60 " +
+                        (sort === value
+                          ? "bg-slate-900 text-white"
+                          : "text-slate-500 hover:text-slate-900")
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {loading && (
@@ -490,7 +559,7 @@ function JobRow({ card, onClick }: { card: JobCard; onClick: () => void }) {
           {card.roundCount}
         </p>
       </div>
-      <div className="min-w-[96px] text-right">
+      <div className="relative min-w-[96px] text-right">
         {tier ? (
           <>
             <p className={`text-[22px] font-bold leading-none ${tier.color}`}>
@@ -505,7 +574,27 @@ function JobRow({ card, onClick }: { card: JobCard; onClick: () => void }) {
         ) : (
           <span className="text-[12px] text-slate-400">—</span>
         )}
+        {card.score != null && (
+          <div className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-44 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-md group-hover:block">
+            <p className="mb-2.5 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+              Match breakdown
+            </p>
+            <BreakdownRow label="Skills" value={card.skillsPct} />
+            <BreakdownRow label="Projects" value={card.projectsPct} />
+          </div>
+        )}
       </div>
     </button>
+  );
+}
+
+function BreakdownRow({ label, value }: { label: string; value: number | null }) {
+  return (
+    <div className="flex items-center justify-between py-1">
+      <span className="text-[12px] text-slate-500">{label}</span>
+      <span className="text-[12px] font-semibold text-slate-900">
+        {value == null ? "—" : `${value}%`}
+      </span>
+    </div>
   );
 }

@@ -149,6 +149,7 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
       standing: edu?.is_current ? "current" : "",
     },
     skills: dedupe(parsed.skills.map((s) => s.trim()).filter(Boolean)),
+    projects,
     experience: [...projects, ...work],
     scores: { cgpa: edu?.cgpa != null ? String(edu.cgpa) : "", twelfth: "", tenth: "" },
     roleHint: parsed.strongest_domain ?? parsed.work_experience[0]?.role ?? "",

@@ -10,6 +10,9 @@ export type OnboardingProfile = {
   name: string;
   education: { degree: string; major: string; institution: string; years: string; standing: string };
   skills: string[];
+  // Raw project entries ("name · description"), kept separate from the merged
+  // `experience` list so the project-match criterion can score against them.
+  projects: string[];
   experience: string[];
   scores: { cgpa: string; twelfth: string; tenth: string };
   roleHint: string;
@@ -23,6 +26,7 @@ export const EMPTY_PROFILE: OnboardingProfile = {
   name: "",
   education: { degree: "", major: "", institution: "", years: "", standing: "" },
   skills: [],
+  projects: [],
   experience: [],
   scores: { cgpa: "", twelfth: "", tenth: "" },
   roleHint: "",
@@ -37,5 +41,7 @@ export function deriveSearchInput(profile: OnboardingProfile): SearchInput {
     roleText: profile.roleHint,
     skillNames: profile.skills,
     experienceYears: profile.experienceYears,
+    projectText: profile.projects.join(". "),
+    sort: "default",
   };
 }

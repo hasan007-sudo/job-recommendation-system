@@ -1,6 +1,12 @@
-// Job-centric search: title (exact + trigram + semantic), company, and
-// experience act as filters; the match score is skill coverage only
-// (matched skills / job's required-skill count, via ILIKE on requiredSkills).
+// Job-centric search. Title (exact + trigram + semantic) and company act as a
+// precedence tier, experience stays a hard filter, and the candidate set is the
+// UNION of role-matched ∪ company-matched ∪ skill-matched ∪ project-matched jobs.
+// The match % is an equal blend of two sub-scores:
+//   • skills%   — job's required-skill tokens covered by the user's skills (ILIKE).
+//   • projects% — job's required-skill tokens found in the user's project text,
+//                 falling back to project↔job embedding cosine when none overlap.
+// Default sort puts role/company matches on top, then by blended score; the
+// "score" sort ignores the tier and ranks purely by blended score.
 // Rounds are parsed at read time from focusRoundPattern.
 
 import { prisma } from "./prisma";
@@ -12,6 +18,16 @@ const TITLE_TRIGRAM_MIN = 0.3;
 const COMPANY_TRIGRAM_MIN = 0.4;
 const TITLE_CANDIDATES = 20;
 const RESULT_LIMIT = 30;
+// Raw candidates pulled before the blended score is computed + sorted in JS.
+// Generous cap so the JS-side blend/sort isn't starved by a SQL-side limit.
+const RAW_CANDIDATE_CAP = 200;
+
+// Cosine similarity (1 - distance) → percent. Rescales the typical resume↔JD
+// band (~0.15–0.7) across 0–100 so the project semantic fallback varies.
+function simToPercent(sim: number): number {
+  const clamped = Math.max(0, Math.min(1, (sim - 0.15) / 0.55));
+  return Math.round(clamped * 100);
+}
 
 function normalize(text: string): string {
   return text
@@ -94,11 +110,17 @@ async function matchCompanyIds(text: string): Promise<string[]> {
   return [];
 }
 
+export type SortMode = "default" | "score";
+
 export type SearchInput = {
   companyText: string;
   roleText: string;
   skillNames: string[];
   experienceYears: number | null;
+  // Concatenated resume project text, scored against each job's required skills.
+  projectText?: string;
+  // "default" tiers role/company matches first; "score" ranks purely by blend.
+  sort?: SortMode;
 };
 
 type SearchRow = {
@@ -111,9 +133,18 @@ type SearchRow = {
   matched: number | null;
   required: number;
   coverage: number | null;
+  projMatched: number;
+  projSim: number | null;
+  roleOrCompanyMatched: boolean;
 };
 
 export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
+  const sort = input.sort ?? "default";
+  const projectText = (input.projectText ?? "").trim();
+  // Normalize to the same [a-z0-9] form the SQL applies to each job skill token,
+  // so substring matching of a token inside the project blob is apples-to-apples.
+  const projTextNorm = projectText.toLowerCase().replace(/[^a-z0-9]/g, "");
+
   const [titleMatches, companyIds] = await Promise.all([
     input.roleText
       ? matchTitle(input.roleText)
@@ -137,9 +168,15 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
   const titleIds = titleMatches.map((m) => m.id);
   const hasSkills = skills.length > 0;
 
-  // Score = skill coverage only: matched skills / job's required-skill count.
-  // Filters (title, company, experience) decide which jobs qualify; coverage
-  // ranks and badges them. No skills → coverage is null and the badge shows "—".
+  // Embed the project text once for the semantic fallback. With no project text
+  // we pass a throwaway literal that only needs to parse — the CASE guard
+  // (hasProjVec) keeps projSim null and the `<=>` is never evaluated.
+  const hasProjVec = projectText.length > 0;
+  const projVecLit = hasProjVec ? toPgVectorLiteral(await embed(projectText)) : "[0]";
+
+  // Candidate set = role-matched ∪ company-matched ∪ skill-matched ∪
+  // project-keyword-matched (experience stays a hard filter). Sub-score columns
+  // are raw; the blend + tier sort + final limit happen in JS below.
   const rows = await prisma.$queryRaw<SearchRow[]>`
     SELECT
       j.id AS "jobId",
@@ -152,12 +189,19 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
       cov.required AS "required",
       CASE WHEN ${hasSkills}
            THEN cov.matched::float / NULLIF(cov.required, 0)
-           ELSE NULL END AS "coverage"
+           ELSE NULL END AS "coverage",
+      cov."projMatched" AS "projMatched",
+      CASE WHEN ${hasProjVec} AND j.embedding IS NOT NULL
+           THEN (1 - (j.embedding <=> ${projVecLit}::vector))::float
+           ELSE NULL END AS "projSim",
+      (
+        (cardinality(${titleIds}::text[]) > 0 AND j.id = ANY(${titleIds}::text[]))
+        OR (cardinality(${companyIds}::text[]) > 0 AND j."companyId" = ANY(${companyIds}::text[]))
+      ) AS "roleOrCompanyMatched"
     FROM "Job" j
     JOIN "Company" c ON c.id = j."companyId"
-    -- Count the JOB's skill tokens, and how many are covered by any user skill.
-    -- Counting job tokens (not user skills) keeps matched ≤ required, so
-    -- coverage stays in [0,1] and "matched / total" reads correctly.
+    -- Per job: count its skill tokens, how many a user skill covers, and how many
+    -- appear in the project text. Counting job tokens keeps matched ≤ required.
     CROSS JOIN LATERAL (
       SELECT
         COUNT(*) FILTER (WHERE EXISTS (
@@ -166,39 +210,76 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
             AND regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g')
               LIKE '%' || regexp_replace(lower(btrim(sk)), '[^a-z0-9]', '', 'g') || '%'
         ))::int AS matched,
+        COUNT(*) FILTER (WHERE
+          length(${projTextNorm}) > 0
+          AND position(regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g') in ${projTextNorm}) > 0
+        )::int AS "projMatched",
         COUNT(*)::int AS required
       FROM regexp_split_to_table(COALESCE(j."requiredSkills", ''), '[,;|]') AS tok
       WHERE length(regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g')) > 0
     ) cov
-    WHERE (cardinality(${titleIds}::text[]) = 0 OR j.id = ANY(${titleIds}::text[]))
-      AND (cardinality(${companyIds}::text[]) = 0 OR j."companyId" = ANY(${companyIds}::text[]))
-      AND (
+    WHERE (
         ${input.experienceYears}::int IS NULL
         OR ${input.experienceYears}::int BETWEEN COALESCE(j."experienceMinYears", 0)
                                              AND COALESCE(j."experienceMaxYears", 99)
       )
-    ORDER BY "coverage" DESC NULLS LAST, j."createdAt" ASC
-    LIMIT ${RESULT_LIMIT}
+      AND (
+        (cardinality(${titleIds}::text[]) > 0 AND j.id = ANY(${titleIds}::text[]))
+        OR (cardinality(${companyIds}::text[]) > 0 AND j."companyId" = ANY(${companyIds}::text[]))
+        OR cov.matched > 0
+        OR cov."projMatched" > 0
+      )
+    ORDER BY "roleOrCompanyMatched" DESC, cov.matched DESC, cov."projMatched" DESC, j."createdAt" ASC
+    LIMIT ${RAW_CANDIDATE_CAP}
   `;
 
-  return rows
-    // With skills, a job must share at least one (coverage > 0). Without skills,
-    // there's no score to gate on — show every filtered job.
-    .filter((row) => !hasSkills || (row.coverage != null && row.coverage > 0))
-    .map((row) => {
-      const rounds = parseRounds(row.focusRoundPattern);
-      return {
-        jobId: row.jobId,
-        jobTitle: row.jobTitle,
-        companyName: row.companyName,
-        seniority: deriveSeniority(row.experienceMinYears),
-        experienceMinYears: row.experienceMinYears,
-        experienceMaxYears: row.experienceMaxYears,
-        roundCount: rounds.length,
-        rounds,
-        score: row.coverage == null ? null : Math.round(row.coverage * 100),
-        matchedSkills: row.matched,
-        totalSkills: row.required,
-      };
-    });
+  const cards: JobCard[] = rows.map((row) => {
+    const skillsPct = row.coverage == null ? null : Math.round(row.coverage * 100);
+
+    // Projects only score when the resume has project text. Keyword overlap of
+    // the job's required skills wins; fall back to embedding cosine when none hit.
+    let projectsPct: number | null = null;
+    if (hasProjVec) {
+      if (row.projMatched > 0 && row.required > 0) {
+        projectsPct = Math.round((row.projMatched / row.required) * 100);
+      } else if (row.projSim != null) {
+        projectsPct = simToPercent(row.projSim);
+      }
+    }
+
+    const parts = [skillsPct, projectsPct].filter((p): p is number => p != null);
+    const score = parts.length
+      ? Math.round(parts.reduce((a, b) => a + b, 0) / parts.length)
+      : null;
+
+    const rounds = parseRounds(row.focusRoundPattern);
+    return {
+      jobId: row.jobId,
+      jobTitle: row.jobTitle,
+      companyName: row.companyName,
+      seniority: deriveSeniority(row.experienceMinYears),
+      experienceMinYears: row.experienceMinYears,
+      experienceMaxYears: row.experienceMaxYears,
+      roundCount: rounds.length,
+      rounds,
+      score,
+      skillsPct,
+      projectsPct,
+      roleOrCompanyMatched: row.roleOrCompanyMatched,
+      matchedSkills: row.matched,
+      totalSkills: row.required,
+    };
+  });
+
+  // Stable sort: within a tier (or overall, for "score") rank by blended score.
+  // SQL already ordered the cap by role/company then coverage, so ties keep a
+  // sensible (createdAt-asc) order.
+  cards.sort((a, b) => {
+    if (sort === "default" && a.roleOrCompanyMatched !== b.roleOrCompanyMatched) {
+      return a.roleOrCompanyMatched ? -1 : 1;
+    }
+    return (b.score ?? -1) - (a.score ?? -1);
+  });
+
+  return cards.slice(0, RESULT_LIMIT);
 }
