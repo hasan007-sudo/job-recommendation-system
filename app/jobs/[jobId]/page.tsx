@@ -4,8 +4,7 @@ import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import type { ParsedRound } from "../../../lib/rounds";
-import { formatExperience, tierFor } from "../../../lib/display";
-import { requestMatchScores } from "../../../lib/match-client";
+import { formatExperience, matchPill, initials } from "../../../lib/display";
 
 type Item = { title: string; description: string };
 type Group = { name: string; items: Item[] };
@@ -70,35 +69,17 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
   }, [jobId]);
 
   useEffect(() => {
-    // The list page already computed and cached this score — reuse it and skip
-    // the network round-trip when it's available.
+    // The list page already computed and cached this score — reuse it. On a
+    // direct link (no cached cards) there's no score, so the badge shows "—".
     try {
       const cards = JSON.parse(sessionStorage.getItem("rounds:cards") ?? "[]");
       const cached = cards.find((c: { jobId: string }) => c.jobId === jobId);
-      if (typeof cached?.matchPercent === "number") {
-        setMatchPercent(cached.matchPercent);
-        return;
+      if (typeof cached?.score === "number") {
+        setMatchPercent(cached.score);
       }
     } catch {
-      // fall through to the API
+      // no cached score — leave the badge empty
     }
-
-    const raw = sessionStorage.getItem("rounds:profile");
-    if (!raw) return;
-    let cancelled = false;
-    try {
-      const profile = JSON.parse(raw);
-      requestMatchScores(profile.resumeText ?? "", [jobId]).then((scores) => {
-        if (!cancelled && typeof scores[jobId] === "number") {
-          setMatchPercent(scores[jobId]);
-        }
-      });
-    } catch {
-      // ignore
-    }
-    return () => {
-      cancelled = true;
-    };
   }, [jobId]);
 
   return (
@@ -146,28 +127,41 @@ function JobDetailView({
 }) {
   const { job, competencies } = detail;
   const experience = formatExperience(job.experienceMinYears, job.experienceMaxYears);
-  const tier = tierFor(matchPercent);
+  const meta = [job.seniority, experience].filter(Boolean);
+  const pill = matchPill(matchPercent);
 
   return (
-    <>
-      <section className="border-b border-slate-200 pb-8">
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <section className="p-8 sm:p-10">
         <div className="flex items-start justify-between gap-6">
           <div className="min-w-0">
-            <h1 className="text-[44px] font-bold leading-[1.05] tracking-tight text-slate-900">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-[13px] font-bold text-white">
+                {initials(job.companyName)}
+              </div>
+              <span className="text-[16px] font-semibold text-slate-500">
+                {job.companyName}
+              </span>
+            </div>
+            <h1 className="mt-5 text-[44px] font-bold leading-[1.05] tracking-tight text-slate-900">
               {job.jobTitle}
             </h1>
-            <p className="mt-3 text-[15px] text-slate-500">
-              {job.companyName} · <span className="capitalize">{job.seniority}</span>
-              {experience ? ` · ${experience}` : ""}
-            </p>
-          </div>
-          {tier && (
-            <div className="shrink-0 text-right">
-              <p className={`text-[36px] font-bold leading-none ${tier.color}`}>
-                {matchPercent}%
+            {meta.length > 0 && (
+              <p className="mt-3 text-[15px] text-slate-500">
+                <span className="capitalize">{meta.join(" · ")}</span>
               </p>
-              <p className={`mt-1 text-[11px] font-bold uppercase tracking-[0.18em] ${tier.color}`}>
-                {tier.label}
+            )}
+          </div>
+          {pill && (
+            <div className="shrink-0 text-right">
+              <div
+                className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[13px] font-bold ${pill.pill}`}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${pill.dot}`} />
+                {matchPercent}% {pill.label}
+              </div>
+              <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+                Based on your resume
               </p>
             </div>
           )}
@@ -179,11 +173,15 @@ function JobDetailView({
         )}
       </section>
 
-      <div className="mt-10 grid grid-cols-1 gap-12 lg:grid-cols-2">
-        <Timeline rounds={job.rounds} />
-        <Competencies groups={competencies.groups} />
+      <div className="grid grid-cols-1 border-t border-slate-200 lg:grid-cols-2">
+        <div className="border-b border-slate-200 bg-slate-50 p-8 sm:p-10 lg:border-b-0 lg:border-r">
+          <Timeline rounds={job.rounds} />
+        </div>
+        <div className="p-8 sm:p-10">
+          <Competencies groups={competencies.groups} />
+        </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -257,7 +255,7 @@ function Competencies({ groups }: { groups: Group[] }) {
                   {group.items.map((it, ii) => (
                     <div
                       key={ii}
-                      className="rounded-xl border border-slate-200 bg-white px-5 py-4"
+                      className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-4"
                     >
                       <p className="text-[15px] font-bold text-slate-900">{it.title}</p>
                       {it.description && (

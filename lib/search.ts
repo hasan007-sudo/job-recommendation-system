@@ -1,5 +1,6 @@
-// Job-centric search: rank real scraped jobs by title (exact + trigram + semantic),
-// company, skills (ILIKE on requiredSkills text), and experience fit.
+// Job-centric search: title (exact + trigram + semantic), company, and
+// experience act as filters; the match score is skill coverage only
+// (matched skills / job's required-skill count, via ILIKE on requiredSkills).
 // Rounds are parsed at read time from focusRoundPattern.
 
 import { prisma } from "./prisma";
@@ -7,7 +8,6 @@ import { embed, toPgVectorLiteral } from "./embeddings";
 import { parseRounds } from "./rounds";
 import type { JobCard, Seniority } from "./types";
 
-const WEIGHTS = { title: 2.0, company: 1.5, skill: 1.0, experience: 0.5 };
 const TITLE_TRIGRAM_MIN = 0.3;
 const COMPANY_TRIGRAM_MIN = 0.4;
 const TITLE_CANDIDATES = 20;
@@ -108,7 +108,9 @@ type SearchRow = {
   experienceMinYears: number | null;
   experienceMaxYears: number | null;
   focusRoundPattern: string;
-  totalScore: number;
+  matched: number | null;
+  required: number;
+  coverage: number | null;
 };
 
 export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
@@ -133,8 +135,11 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
   }
 
   const titleIds = titleMatches.map((m) => m.id);
-  const titleScores = titleMatches.map((m) => m.score);
+  const hasSkills = skills.length > 0;
 
+  // Score = skill coverage only: matched skills / job's required-skill count.
+  // Filters (title, company, experience) decide which jobs qualify; coverage
+  // ranks and badges them. No skills → coverage is null and the badge shows "—".
   const rows = await prisma.$queryRaw<SearchRow[]>`
     SELECT
       j.id AS "jobId",
@@ -143,49 +148,43 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
       j."experienceMinYears",
       j."experienceMaxYears",
       j."focusRoundPattern",
-      (
-        ${WEIGHTS.title}::float * COALESCE((
-          SELECT s.score FROM (
-            SELECT unnest(${titleIds}::text[]) AS id,
-                   unnest(${titleScores}::float[]) AS score
-          ) s WHERE s.id = j.id LIMIT 1
-        ), 0)
-        + ${WEIGHTS.company}::float * (
-          CASE
-            WHEN cardinality(${companyIds}::text[]) > 0
-                 AND j."companyId" = ANY(${companyIds}::text[]) THEN 1.0
-            ELSE 0.0
-          END
-        )
-        + ${WEIGHTS.skill}::float * (
-          SELECT COUNT(*) FROM unnest(${skills}::text[]) sk
-          WHERE length(regexp_replace(lower(btrim(sk)), '[^a-z0-9]', '', 'g')) > 0
-            AND EXISTS (
-              SELECT 1
-              FROM regexp_split_to_table(COALESCE(j."requiredSkills", ''), '[,;|]') AS tok
-              WHERE regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g')
-                LIKE '%' || regexp_replace(lower(btrim(sk)), '[^a-z0-9]', '', 'g') || '%'
-            )
-        )::float
-        + ${WEIGHTS.experience}::float * (
-          CASE
-            WHEN ${input.experienceYears}::int IS NULL THEN 0
-            WHEN ${input.experienceYears}::int BETWEEN COALESCE(j."experienceMinYears", 0)
-                                                   AND COALESCE(j."experienceMaxYears", 99) THEN 1.0
-            ELSE 0.0
-          END
-        )
-      )::float AS "totalScore"
+      CASE WHEN ${hasSkills} THEN cov.matched ELSE NULL END AS "matched",
+      cov.required AS "required",
+      CASE WHEN ${hasSkills}
+           THEN cov.matched::float / NULLIF(cov.required, 0)
+           ELSE NULL END AS "coverage"
     FROM "Job" j
     JOIN "Company" c ON c.id = j."companyId"
+    -- Count the JOB's skill tokens, and how many are covered by any user skill.
+    -- Counting job tokens (not user skills) keeps matched ≤ required, so
+    -- coverage stays in [0,1] and "matched / total" reads correctly.
+    CROSS JOIN LATERAL (
+      SELECT
+        COUNT(*) FILTER (WHERE EXISTS (
+          SELECT 1 FROM unnest(${skills}::text[]) sk
+          WHERE length(regexp_replace(lower(btrim(sk)), '[^a-z0-9]', '', 'g')) > 0
+            AND regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g')
+              LIKE '%' || regexp_replace(lower(btrim(sk)), '[^a-z0-9]', '', 'g') || '%'
+        ))::int AS matched,
+        COUNT(*)::int AS required
+      FROM regexp_split_to_table(COALESCE(j."requiredSkills", ''), '[,;|]') AS tok
+      WHERE length(regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g')) > 0
+    ) cov
     WHERE (cardinality(${titleIds}::text[]) = 0 OR j.id = ANY(${titleIds}::text[]))
       AND (cardinality(${companyIds}::text[]) = 0 OR j."companyId" = ANY(${companyIds}::text[]))
-    ORDER BY "totalScore" DESC, j."createdAt" ASC
+      AND (
+        ${input.experienceYears}::int IS NULL
+        OR ${input.experienceYears}::int BETWEEN COALESCE(j."experienceMinYears", 0)
+                                             AND COALESCE(j."experienceMaxYears", 99)
+      )
+    ORDER BY "coverage" DESC NULLS LAST, j."createdAt" ASC
     LIMIT ${RESULT_LIMIT}
   `;
 
   return rows
-    .filter((row) => Number(row.totalScore) > 0)
+    // With skills, a job must share at least one (coverage > 0). Without skills,
+    // there's no score to gate on — show every filtered job.
+    .filter((row) => !hasSkills || (row.coverage != null && row.coverage > 0))
     .map((row) => {
       const rounds = parseRounds(row.focusRoundPattern);
       return {
@@ -197,7 +196,9 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
         experienceMaxYears: row.experienceMaxYears,
         roundCount: rounds.length,
         rounds,
-        score: Number(row.totalScore),
+        score: row.coverage == null ? null : Math.round(row.coverage * 100),
+        matchedSkills: row.matched,
+        totalSkills: row.required,
       };
     });
 }

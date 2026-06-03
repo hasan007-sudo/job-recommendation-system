@@ -2,7 +2,7 @@
 
 Search resolves a free-text input `{ companyText, roleText, skillNames, experienceYears }` to a ranked list of **job cards** (`JobCard[]`). Each card is one real scraped job; its interview rounds are parsed at read time from the job's `focusRoundPattern`.
 
-There are two independent candidate matchers — one for **role text** (title) and one for **company text** — and then a single SQL query that filters to the intersection and scores every surviving job.
+Search is a **two-layer model**: title, company, and experience act as **filters** (which jobs qualify), and the match score is **skill coverage only** — `matched skills / job's required-skill count`. There are two independent candidate matchers — one for **role text** (title) and one for **company text** — and then a single SQL query that filters to the intersection and scores every surviving job by skill coverage.
 
 ```
 { companyText, roleText, skillNames, experienceYears }
@@ -25,15 +25,17 @@ There are two independent candidate matchers — one for **role text** (title) a
         └───────────────────────────────────────────────┘
                         ▼
         ┌───────────────────────────────────────────────┐
-        │ Single ranking SQL over "Job" JOIN "Company":  │
-        │   WHERE job ∈ titleIds (if any)                │
-        │     AND company ∈ companyIds (if any)          │
-        │   score = 2·title + 1.5·company + 1·skills     │
-        │           + 0.5·experience                     │
-        │   ORDER BY score DESC, createdAt ASC LIMIT 30  │
+        │ Single SQL over "Job" JOIN "Company":          │
+        │   FILTER  job ∈ titleIds (if any)              │
+        │      AND  company ∈ companyIds (if any)        │
+        │      AND  experienceYears ∈ [min,max] (if set) │
+        │   SCORE   coverage = matched / required skills │
+        │   ORDER BY coverage DESC NULLS LAST,           │
+        │            createdAt ASC LIMIT 30              │
         └───────────────────────────────────────────────┘
                         ▼
-        filter score > 0 → parseRounds() → JobCard[]
+        skills given? drop coverage=0 : keep all (score null)
+                → parseRounds() → JobCard[]
 ```
 
 All matchers live in [`lib/search.ts`](../lib/search.ts).
@@ -98,7 +100,7 @@ SELECT id, (1 - (embedding <=> $vec::vector)) AS score FROM "Job"
 WHERE embedding IS NOT NULL ORDER BY embedding <=> $vec::vector LIMIT 200
 ```
 
-> The vector tier has **no similarity floor of its own** — it always returns the 200 nearest. Distant matches survive here with a low score, but they only matter if the final `totalScore` clears `> 0`, and exact/trigram hits (higher score via `keepMax`) float above them in ranking.
+> The vector tier has **no similarity floor of its own** — it always returns the 200 nearest. These scores only determine which jobs enter the **title filter** (`titleIds`); they don't rank the final list. Ranking is by skill coverage, so a distant title match that happens to qualify is ordered by how many of its skills you cover, not by its title similarity.
 
 Returns up to `TITLE_CANDIDATES = 200` `{ id, score }` pairs. Empty `roleText` → `[]`.
 
@@ -151,53 +153,66 @@ If nothing was typed (or nothing matched), search returns an empty list instead 
 
 ---
 
-## Final ranking query
+## Final query — filter, then score by coverage
 
-One `$queryRaw` over `Job JOIN Company` filters to the intersection of the matched ids and scores each surviving row:
+One `$queryRaw` over `Job JOIN Company` filters to the intersection of the matched ids (plus the experience band) and scores each surviving row by **skill coverage only**:
 
 ```sql
 SELECT j.id, j."jobTitle", c.name AS "companyName",
        j."experienceMinYears", j."experienceMaxYears", j."focusRoundPattern",
-  ( 2.0  * COALESCE(<title score for this job from titleIds/titleScores>, 0)
-  + 1.5  * CASE WHEN cardinality($companyIds) > 0
-                 AND j."companyId" = ANY($companyIds) THEN 1.0 ELSE 0.0 END
-  + 1.0  * <count of input skills found in j."requiredSkills">
-  + 0.5  * CASE WHEN $experienceYears BETWEEN COALESCE(j."experienceMinYears",0)
-                                          AND COALESCE(j."experienceMaxYears",99)
-                THEN 1.0 ELSE 0.0 END
-  ) AS "totalScore"
+  CASE WHEN $hasSkills THEN
+    (<count of input skills found in j."requiredSkills">)::float
+    / NULLIF(<count of non-empty tokens in j."requiredSkills">, 0)
+  ELSE NULL END AS "coverage"
 FROM "Job" j JOIN "Company" c ON c.id = j."companyId"
 WHERE (cardinality($titleIds)   = 0 OR j.id        = ANY($titleIds))
   AND (cardinality($companyIds) = 0 OR j."companyId" = ANY($companyIds))
-ORDER BY "totalScore" DESC, j."createdAt" ASC
+  AND ($experienceYears::int IS NULL
+       OR $experienceYears::int BETWEEN COALESCE(j."experienceMinYears",0)
+                                    AND COALESCE(j."experienceMaxYears",99))
+ORDER BY "coverage" DESC NULLS LAST, j."createdAt" ASC
 LIMIT 30;
 ```
 
-### Weights
-```ts
-const WEIGHTS = { title: 2.0, company: 1.5, skill: 1.0, experience: 0.5 };
+### Filters (which jobs qualify)
+Three optional filters, all **AND-ed**. The `cardinality($ids) = 0` / `IS NULL` checks make each one a no-op when its input is absent:
+
+- **Title** — `j.id ∈ titleIds` from `matchTitle` (exact ∪ trigram ∪ vector). The title score is used only to decide membership; it no longer feeds the badge.
+- **Company** — `j."companyId" ∈ companyIds` from `matchCompanyIds`.
+- **Experience** — the typed years must fall inside the job's `[min, max]` band. Null input → filter disabled; null job bounds → treated as open-ended (`0`/`99`). **This is a real filter now** — jobs outside the band are excluded, not merely down-weighted.
+
+### Score = skill coverage (the badge %)
+The only scored signal is skill overlap, expressed as a **fraction of the job's requirements you cover**:
+
+```
+coverage = (matched input skills) / (job's required-skill count)   → e.g. 5/7 = 0.71
+score    = round(coverage × 100)                                   → 71  (the badge %)
 ```
 
-- **Title** weighted highest — the role is the strongest signal, and its score is itself graded (1.0 exact down to a low vector similarity).
-- **Company** match is a flat `1.5` bonus when the job's company is in `companyIds`. This term is why a **company-only** search returns results at all: without it those jobs would score `0` and be dropped by the `> 0` filter below.
-- **Skill** term counts how many input skills appear in the job's `requiredSkills`. Each side is normalized (lowercased, non-alphanumerics stripped) and matched as a substring against the job's `,`/`;`/`|`-split skill tokens, so `"node.js"` matches `"NodeJS"`.
-- **Experience** adds `0.5` when the typed years fall inside the job's `[min, max]` band (null input → 0).
+Both sides are normalized (lowercased, non-alphanumerics stripped) and matched as a substring against the job's `,`/`;`/`|`-split skill tokens, so `"node.js"` matches `"NodeJS"`. A job that lists no skills → `required = 0` → `NULLIF` → `coverage` null.
+
+When **no skills** are typed, `coverage` is `NULL` for every row and the badge renders `—`.
 
 ### Filter and shape
 ```ts
-rows.filter((row) => Number(row.totalScore) > 0).map(... parseRounds ...)
+rows
+  .filter((row) => !hasSkills || (row.coverage != null && row.coverage > 0))
+  .map(... parseRounds ...)
 ```
-Rows that matched a filter but scored nothing are dropped, then `focusRoundPattern` is parsed into rounds and `experienceMinYears` is mapped to a display `seniority` via `deriveSeniority` (`≤2 entry`, `≤6 mid`, else `senior`).
+- **Skills given:** a job must share at least one skill (`coverage > 0`) to appear — skills act as both the score *and* an implicit filter.
+- **No skills:** the gate is skipped; every title/company/experience-filtered job is returned with `score: null`.
 
-### What the filters mean
-The `cardinality($ids) = 0` checks make each filter optional, but the two are **AND-ed** — so company + role narrows to jobs matching *both*.
+Then `focusRoundPattern` is parsed into rounds and `experienceMinYears` is mapped to a display `seniority` via `deriveSeniority` (`≤2 entry`, `≤6 mid`, else `senior`). `JobCard.score` is the `0–100` coverage badge, or `null` when no skills were queried.
 
-| Input | Filters applied | Result |
+### What the inputs mean
+
+| Input | Behavior | Result |
 |---|---|---|
-| `Accenture` | company only | all Accenture jobs (+1.5 each) ranked by recency |
-| `SDE` | title only | exact/trigram/vector title matches, scored by title similarity |
-| `Accenture` + `SDE` | company **and** title | Accenture jobs that also match the title |
-| `[React, Node.js]` | skills only | jobs whose `requiredSkills` contain those skills |
+| `Accenture` | company filter only, no skills | all Accenture jobs, badge `—`, ranked by recency |
+| `SDE` | title filter only, no skills | title matches, badge `—`, ranked by recency |
+| `Accenture` + `SDE` | company **and** title filter | Accenture jobs that also match the title, badge `—` |
+| `[React, Node.js]` | skills only | jobs sharing ≥1 skill, badge = coverage %, ranked by coverage |
+| `SDE` + `[React]` + `3 yrs` | title + experience filter, coverage score | engineering roles in the 3-yr band, ranked by React coverage |
 | nothing | — | `[]` (guard) |
 
 ---

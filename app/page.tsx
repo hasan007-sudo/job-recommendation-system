@@ -6,7 +6,6 @@ import { Loader2, X } from "lucide-react";
 import type { OnboardingProfile } from "../lib/onboarding";
 import type { ParsedRound } from "../lib/rounds";
 import { formatExperience, tierFor } from "../lib/display";
-import { requestMatchScores } from "../lib/match-client";
 
 type Skill = { name: string };
 
@@ -19,8 +18,9 @@ type JobCard = {
   experienceMaxYears: number | null;
   roundCount: number;
   rounds: ParsedRound[];
-  score: number;
-  matchPercent?: number;
+  score: number | null;
+  matchedSkills: number | null;
+  totalSkills: number;
 };
 
 const EXP_OPTIONS: { label: string; value: string }[] = [
@@ -47,7 +47,6 @@ export default function HomePage() {
   const [roleText, setRoleText] = useState<string>("");
   const [experienceYears, setExperienceYears] = useState<string>("");
   const [cards, setCards] = useState<JobCard[] | null>(null);
-  const [matchLoading, setMatchLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -83,19 +82,12 @@ export default function HomePage() {
         const input = JSON.parse(auto);
         const skills = Array.isArray(input.skillNames) ? input.skillNames : [];
         setSkillNames(skills);
-        const raw2 = sessionStorage.getItem("rounds:profile");
-        const resumeText = raw2
-          ? (() => { try { return (JSON.parse(raw2) as OnboardingProfile).resumeText ?? ""; } catch { return ""; } })()
-          : "";
-        runSearch(
-          {
-            companyText: "",
-            roleText: input.roleText ?? "",
-            skillNames: skills,
-            experienceYears: input.experienceYears ?? null,
-          },
-          resumeText,
-        );
+        runSearch({
+          companyText: "",
+          roleText: input.roleText ?? "",
+          skillNames: skills,
+          experienceYears: input.experienceYears ?? null,
+        });
         return;
       } catch {
         // fall through
@@ -108,12 +100,13 @@ export default function HomePage() {
         const f = JSON.parse(cachedFilters);
         if (typeof f.roleText === "string") setRoleText(f.roleText);
         if (Array.isArray(f.skillNames)) setSkillNames(f.skillNames);
-        if (typeof f.experienceYears === "string") setExperienceYears(f.experienceYears);
+        if (typeof f.experienceYears === "string")
+          setExperienceYears(f.experienceYears);
       } catch {
         // ignore
       }
     } else if (profileSkills?.length) {
-      setSkillNames(profileSkills.slice(0, 6));
+      setSkillNames(profileSkills);
     }
 
     const cachedCards = sessionStorage.getItem("rounds:cards");
@@ -148,15 +141,12 @@ export default function HomePage() {
     setSkillSearch("");
   }
 
-  async function runSearch(
-    input: {
-      companyText: string;
-      roleText: string;
-      skillNames: string[];
-      experienceYears: number | null;
-    },
-    resumeText?: string,
-  ) {
+  async function runSearch(input: {
+    companyText: string;
+    roleText: string;
+    skillNames: string[];
+    experienceYears: number | null;
+  }) {
     setLoading(true);
     setError("");
     try {
@@ -171,41 +161,17 @@ export default function HomePage() {
       sessionStorage.setItem("rounds:cards", JSON.stringify(newCards));
       sessionStorage.setItem(
         "rounds:filters",
-        JSON.stringify({ roleText: input.roleText, skillNames: input.skillNames, experienceYears: input.experienceYears == null ? "" : String(input.experienceYears) })
+        JSON.stringify({
+          roleText: input.roleText,
+          skillNames: input.skillNames,
+          experienceYears:
+            input.experienceYears == null ? "" : String(input.experienceYears),
+        }),
       );
-      fetchMatchScores(newCards, resumeText);
     } catch {
       setError("Could not run search. Check the database connection.");
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function fetchMatchScores(forCards: JobCard[], resumeTextOverride?: string) {
-    if (forCards.length === 0) return;
-    const resumeText = resumeTextOverride ?? profile?.resumeText ?? "";
-    if (!resumeText.trim()) return;
-    setMatchLoading(true);
-    try {
-      const scores = await requestMatchScores(
-        resumeText,
-        forCards.map((c) => c.jobId),
-      );
-      setCards((current) => {
-        if (!current) return current;
-        const next = current
-          .map((c) => ({
-            ...c,
-            matchPercent: scores[c.jobId] ?? c.matchPercent,
-          }))
-          .sort((a, b) => (b.matchPercent ?? -1) - (a.matchPercent ?? -1));
-        sessionStorage.setItem("rounds:cards", JSON.stringify(next));
-        return next;
-      });
-    } catch {
-      // non-fatal
-    } finally {
-      setMatchLoading(false);
     }
   }
 
@@ -383,7 +349,6 @@ export default function HomePage() {
                   <JobRow
                     key={card.jobId}
                     card={card}
-                    matchLoading={matchLoading}
                     onClick={() => router.push(`/jobs/${card.jobId}`)}
                   />
                 ))}
@@ -445,12 +410,10 @@ function ActiveResumeCard({
       <p className="text-[16px] font-bold text-slate-900">
         {profile.name || "Your resume"}
       </p>
-      {eduLine && (
-        <p className="mt-1 text-[13px] text-slate-500">{eduLine}</p>
-      )}
-      {profile.skills && profile.skills.length > 0 && (
+      {eduLine && <p className="mt-1 text-[13px] text-slate-500">{eduLine}</p>}
+      {/* {profile.skills && profile.skills.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {profile.skills.slice(0, 6).map((s) => (
+          {profile.skills.map((s) => (
             <span
               key={s}
               className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-800"
@@ -459,7 +422,7 @@ function ActiveResumeCard({
             </span>
           ))}
         </div>
-      )}
+      )} */}
     </div>
   );
 }
@@ -490,16 +453,8 @@ function EmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-function JobRow({
-  card,
-  matchLoading,
-  onClick,
-}: {
-  card: JobCard;
-  matchLoading: boolean;
-  onClick: () => void;
-}) {
-  const tier = tierFor(card.matchPercent);
+function JobRow({ card, onClick }: { card: JobCard; onClick: () => void }) {
+  const tier = tierFor(card.score ?? undefined);
   const experience = formatExperience(
     card.experienceMinYears,
     card.experienceMaxYears,
@@ -521,6 +476,11 @@ function JobRow({
           <span className="capitalize">{card.seniority}</span>
           {experience ? ` · ${experience}` : ""}
         </p>
+        {card.matchedSkills != null && (
+          <p className="mt-1.5 text-[12px] font-semibold text-slate-400">
+            {card.matchedSkills} / {card.totalSkills} skills matched
+          </p>
+        )}
       </div>
       <div className="hidden text-center sm:block">
         <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
@@ -534,7 +494,7 @@ function JobRow({
         {tier ? (
           <>
             <p className={`text-[22px] font-bold leading-none ${tier.color}`}>
-              {card.matchPercent}%
+              {card.score}%
             </p>
             <p
               className={`mt-1 text-[10px] font-bold uppercase tracking-[0.16em] ${tier.color}`}
@@ -543,9 +503,7 @@ function JobRow({
             </p>
           </>
         ) : (
-          <span className="text-[12px] text-slate-400">
-            {matchLoading ? "…" : "—"}
-          </span>
+          <span className="text-[12px] text-slate-400">—</span>
         )}
       </div>
     </button>

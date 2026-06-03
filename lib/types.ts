@@ -22,5 +22,10 @@ export type JobCard = {
   experienceMaxYears: number | null;
   roundCount: number;
   rounds: ParsedRound[];
-  score: number;
+  // Skill-coverage match % (0–100), or null when no skills were queried.
+  score: number | null;
+  // Job skills covered by the user's skills / the job's total skill count.
+  // matchedSkills is null when no skills were queried.
+  matchedSkills: number | null;
+  totalSkills: number;
 };
