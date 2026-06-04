@@ -344,6 +344,16 @@ export default function HomePage() {
                 </div>
               </Field>
 
+              <Field label="Projects">
+                <textarea
+                  value={projectText}
+                  onChange={(e) => setProjectText(e.target.value)}
+                  placeholder="Describe your projects — what you built and the tech used"
+                  rows={4}
+                  className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-[14px] leading-[1.5] outline-none placeholder:text-slate-400 focus:border-indigo-500"
+                />
+              </Field>
+
               <button
                 onClick={updateResults}
                 disabled={loading}

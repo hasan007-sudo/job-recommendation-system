@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { analyzeResume, extractResumeText } from "../../../../lib/resume";
 
-const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export async function POST(request: Request) {
   let file: File | null = null;
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No file uploaded." }, { status: 400 });
   }
   if (file.size > MAX_BYTES) {
-    return NextResponse.json({ error: "File is larger than 5 MB." }, { status: 400 });
+    return NextResponse.json({ error: "File is larger than 10 MB." }, { status: 400 });
   }
 
   try {

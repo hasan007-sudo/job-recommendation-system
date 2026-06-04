@@ -2,7 +2,15 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Check, FileText, Loader2, Plus, Upload, X } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  FileText,
+  Loader2,
+  Plus,
+  Upload,
+  X,
+} from "lucide-react";
 import {
   deriveSearchInput,
   EMPTY_PROFILE,
@@ -20,7 +28,6 @@ export default function OnboardingPage() {
   const [parseState, setParseState] = useState<ParseState>("idle");
   const [parseSecs, setParseSecs] = useState(0);
   const [error, setError] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
 
   async function handleFile(file: File) {
     setFileName(file.name);
@@ -30,9 +37,13 @@ export default function OnboardingPage() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch("/api/onboarding/parse", { method: "POST", body: fd });
+      const res = await fetch("/api/onboarding/parse", {
+        method: "POST",
+        body: fd,
+      });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Could not parse this résumé.");
+      if (!res.ok)
+        throw new Error(data.error ?? "Could not parse this résumé.");
       setProfile(data.profile);
       setParseSecs(Math.max(1, Math.round((Date.now() - started) / 1000)));
       setParseState("done");
@@ -44,7 +55,10 @@ export default function OnboardingPage() {
   }
 
   function confirmAndContinue() {
-    sessionStorage.setItem("rounds:autosearch", JSON.stringify(deriveSearchInput(profile)));
+    sessionStorage.setItem(
+      "rounds:autosearch",
+      JSON.stringify(deriveSearchInput(profile)),
+    );
     sessionStorage.setItem("rounds:profile", JSON.stringify(profile));
     router.push("/");
   }
@@ -55,22 +69,24 @@ export default function OnboardingPage() {
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-2">
             <div className="h-6 w-6 rounded-md bg-slate-900" />
-            <span className="text-[15px] font-bold tracking-tight text-slate-900">Rounds</span>
+            <span className="text-[15px] font-bold tracking-tight text-slate-900">
+              Rounds
+            </span>
           </div>
           <span className="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
-            {step === "upload" ? "Step 01 / Onboarding" : "Step 02 / Profile review"}
+            {step === "upload"
+              ? "Step 01 / Onboarding"
+              : "Step 02 / Profile review"}
           </span>
         </div>
       </header>
 
       {step === "upload" ? (
         <UploadStep
-          inputRef={inputRef}
           fileName={fileName}
           parseState={parseState}
           parseSecs={parseSecs}
           error={error}
-          onPick={() => inputRef.current?.click()}
           onFile={handleFile}
           onManual={() => {
             setProfile(EMPTY_PROFILE);
@@ -89,36 +105,35 @@ export default function OnboardingPage() {
 }
 
 function UploadStep({
-  inputRef,
   fileName,
   parseState,
   parseSecs,
   error,
-  onPick,
   onFile,
   onManual,
 }: {
-  inputRef: React.RefObject<HTMLInputElement | null>;
   fileName: string;
   parseState: ParseState;
   parseSecs: number;
   error: string;
-  onPick: () => void;
   onFile: (file: File) => void;
   onManual: () => void;
 }) {
+  const inputRef = useRef<HTMLInputElement>(null);
   return (
     <div className="mx-auto max-w-3xl px-6 py-16">
+      <label htmlFor="myfile">Select a file:</label>
+      <input type="file" id="myfile" name="myfile" />
       <h1 className="text-[44px] font-bold leading-[1.05] tracking-tight text-slate-900">
         Know every interview before you walk in.
       </h1>
       <p className="mt-4 max-w-xl text-[15px] leading-[1.6] text-slate-500">
-        Drop your resume and we&apos;ll show you which roles fit, the rounds you&apos;ll face, and the
-        competencies interviewers actually assess.
+        Drop your resume and we&apos;ll show you which roles fit, the rounds
+        you&apos;ll face, and the competencies interviewers actually assess.
       </p>
 
       <div
-        onClick={onPick}
+        onClick={() => inputRef.current?.click()}
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault();
@@ -132,25 +147,22 @@ function UploadStep({
         </div>
         <p className="mt-4 text-[16px] font-semibold text-slate-900">
           Drop your resume here, or{" "}
-          <span className="text-indigo-600 underline-offset-2 hover:underline">browse</span>
+          <span className="text-indigo-600 underline-offset-2 hover:underline">
+            browse
+          </span>
         </p>
-        <p className="mt-1 text-[12px] text-slate-500">PDF, DOCX, or TXT — up to 10MB</p>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onPick();
-          }}
-          className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-5 text-[14px] font-semibold text-white"
-        >
+        <p className="mt-1 text-[12px] text-slate-500">
+          PDF, DOCX, or TXT — up to 10MB
+        </p>
+        <span className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-5 text-[14px] font-semibold text-white">
           Select file
-        </button>
+        </span>
       </div>
 
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf,.docx,.txt,.md"
+        accept=".pdf,.docx,.txt"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
@@ -162,7 +174,9 @@ function UploadStep({
         <div className="mt-6 flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
           <FileText size={18} className="text-slate-500" />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[13.5px] font-semibold text-slate-900">{fileName}</p>
+            <p className="truncate text-[13.5px] font-semibold text-slate-900">
+              {fileName}
+            </p>
             <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
               {parseState === "parsing" && "reading…"}
               {parseState === "done" && `extracted · ${parseSecs}s`}
@@ -226,7 +240,8 @@ function ProfileStep({
             Here&apos;s what we read from your resume.
           </h1>
           <p className="mt-3 text-[15px] leading-[1.6] text-slate-500">
-            Fix anything that looks off, then continue to start matching against live roles.
+            Fix anything that looks off, then continue to start matching against
+            live roles.
           </p>
         </div>
         <button
@@ -255,7 +270,10 @@ function ProfileStep({
                 value={profile.education.degree}
                 placeholder="—"
                 onChange={(v) =>
-                  setProfile((p) => ({ ...p, education: { ...p.education, degree: v } }))
+                  setProfile((p) => ({
+                    ...p,
+                    education: { ...p.education, degree: v },
+                  }))
                 }
               />
             </FieldRow>
@@ -264,7 +282,10 @@ function ProfileStep({
                 value={profile.education.major}
                 placeholder="—"
                 onChange={(v) =>
-                  setProfile((p) => ({ ...p, education: { ...p.education, major: v } }))
+                  setProfile((p) => ({
+                    ...p,
+                    education: { ...p.education, major: v },
+                  }))
                 }
               />
             </FieldRow>
@@ -273,7 +294,10 @@ function ProfileStep({
                 value={profile.education.institution}
                 placeholder="—"
                 onChange={(v) =>
-                  setProfile((p) => ({ ...p, education: { ...p.education, institution: v } }))
+                  setProfile((p) => ({
+                    ...p,
+                    education: { ...p.education, institution: v },
+                  }))
                 }
               />
             </FieldRow>
@@ -282,7 +306,10 @@ function ProfileStep({
                 value={profile.education.years}
                 placeholder="—"
                 onChange={(v) =>
-                  setProfile((p) => ({ ...p, education: { ...p.education, years: v } }))
+                  setProfile((p) => ({
+                    ...p,
+                    education: { ...p.education, years: v },
+                  }))
                 }
               />
             </FieldRow>
@@ -291,7 +318,10 @@ function ProfileStep({
                 value={profile.education.standing}
                 placeholder="—"
                 onChange={(v) =>
-                  setProfile((p) => ({ ...p, education: { ...p.education, standing: v } }))
+                  setProfile((p) => ({
+                    ...p,
+                    education: { ...p.education, standing: v },
+                  }))
                 }
               />
             </FieldRow>
@@ -305,7 +335,10 @@ function ProfileStep({
                 value={profile.scores.cgpa}
                 placeholder="—"
                 onChange={(v) =>
-                  setProfile((p) => ({ ...p, scores: { ...p.scores, cgpa: v } }))
+                  setProfile((p) => ({
+                    ...p,
+                    scores: { ...p.scores, cgpa: v },
+                  }))
                 }
                 big
               />
@@ -315,7 +348,10 @@ function ProfileStep({
                 value={profile.scores.twelfth}
                 placeholder="—"
                 onChange={(v) =>
-                  setProfile((p) => ({ ...p, scores: { ...p.scores, twelfth: v } }))
+                  setProfile((p) => ({
+                    ...p,
+                    scores: { ...p.scores, twelfth: v },
+                  }))
                 }
                 big
               />
@@ -325,7 +361,10 @@ function ProfileStep({
                 value={profile.scores.tenth}
                 placeholder="—"
                 onChange={(v) =>
-                  setProfile((p) => ({ ...p, scores: { ...p.scores, tenth: v } }))
+                  setProfile((p) => ({
+                    ...p,
+                    scores: { ...p.scores, tenth: v },
+                  }))
                 }
                 big
               />
@@ -333,10 +372,7 @@ function ProfileStep({
           </div>
         </Card>
 
-        <Card
-          title="Skills"
-          hint={`${profile.skills.length} extracted`}
-        >
+        <Card title="Skills" hint={`${profile.skills.length} extracted`}>
           <SkillsEditor
             items={profile.skills}
             onChange={(skills) => setProfile((p) => ({ ...p, skills }))}
@@ -347,7 +383,9 @@ function ProfileStep({
           <Card title="Experience" hint={`${profile.experience.length} roles`}>
             <ExperienceEditor
               items={profile.experience}
-              onChange={(experience) => setProfile((p) => ({ ...p, experience }))}
+              onChange={(experience) =>
+                setProfile((p) => ({ ...p, experience }))
+              }
             />
           </Card>
         </div>
@@ -382,7 +420,13 @@ function Card({
   );
 }
 
-function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
+function FieldRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div>
       <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
@@ -428,7 +472,8 @@ function SkillsEditor({
   function add() {
     const v = draft.trim();
     if (!v) return;
-    if (!items.some((s) => s.toLowerCase() === v.toLowerCase())) onChange([...items, v]);
+    if (!items.some((s) => s.toLowerCase() === v.toLowerCase()))
+      onChange([...items, v]);
     setDraft("");
   }
   return (
@@ -491,7 +536,9 @@ function ExperienceEditor({
           <input
             value={item}
             placeholder="Project, internship, role…"
-            onChange={(e) => onChange(items.map((v, j) => (j === i ? e.target.value : v)))}
+            onChange={(e) =>
+              onChange(items.map((v, j) => (j === i ? e.target.value : v)))
+            }
             className="flex-1 border-0 bg-transparent text-[14px] font-medium outline-none"
           />
           <button

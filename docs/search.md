@@ -14,7 +14,7 @@ The model has three parts:
         ├──────────────────┬──────────────────┬─────────────────────┐
         ▼                  ▼                   │                     │
 ┌──────────────────┐ ┌──────────────────┐     │ skillNames          │ projectText
-│ matchTitle(role) │ │ matchCompanyIds  │     │ experienceYears     │ (embedded once
+│ matchTitleIds    │ │ matchCompanyIds  │     │ experienceYears     │ (embedded once
 │ exact ∪ trigram  │ │ exact → trigram  │     │ passed into ranking │  for the
 │ ∪ vector (keep   │ │ (first confident)│     │                     │  semantic fallback)
 │ max) → ≤20/tier  │ │ → ≤5 company ids │     │                     │
@@ -27,24 +27,24 @@ The model has three parts:
    └────────────────────────────────────────────────────────┘
                  ▼
    ┌────────────────────────────────────────────────────────┐
-   │ Single SQL over "Job" JOIN "Company":                   │
+   │ Single SQL over "Job" JOIN "Company" (CTE pipeline):    │
    │   WHERE experience-band (hard filter)                   │
    │     AND ( job ∈ titleIds                                │
    │       OR  company ∈ companyIds                          │
    │       OR  skill coverage > 0                            │
    │       OR  project-keyword hits > 0 )      ← UNION       │
-   │   SELECT raw: coverage, projMatched, projSim,           │
-   │               roleOrCompanyMatched                      │
-   │   LIMIT 200  (RAW_CANDIDATE_CAP)                        │
+   │   skillsPct = coverage·100                              │
+   │   projectsPct = projMatched/required·100                │
+   │               ↳ else rescaled(projSim cosine)           │
+   │   score = mean(non-null [skillsPct, projectsPct])       │
+   │   rn_in_tier = ROW_NUMBER() per roleOrCompanyMatched    │
+   │   ── default: floor 15/tier, backfill by score          │
+   │   ── score:   pure top-N by score                       │
+   │   LIMIT 30  (RESULT_LIMIT)                              │
    └────────────────────────────────────────────────────────┘
                  ▼
    ┌────────────────────────────────────────────────────────┐
-   │ In JS (per row):                                        │
-   │   skillsPct   = coverage·100                            │
-   │   projectsPct = projMatched/required ·100               │
-   │                 ↳ else simToPercent(projSim)            │
-   │   score       = mean(non-null [skillsPct, projectsPct]) │
-   │ Sort by mode → slice(30) (RESULT_LIMIT) → parseRounds   │
+   │ JS: thin map row → JobCard, parseRounds (no re-sort)    │
    └────────────────────────────────────────────────────────┘
                  ▼
             JobCard[]
@@ -85,29 +85,29 @@ function normalize(text: string): string {
 
 ---
 
-## Title matching — `matchTitle(roleText)`
+## Title matching — `matchTitleIds(roleText)`
 
-Runs **all three tiers and keeps the max score per job id** (`keepMax`). A generic query like `"Software Engineer"` should surface both the exact title and related real titles, so we union the tiers rather than stopping at the first hit. Each tier is capped at `TITLE_CANDIDATES = 20`.
+Runs **all three tiers and unions their ids** into a `Set`. A generic query like `"Software Engineer"` should surface both the exact title and related real titles, so we union the tiers rather than stopping at the first hit. Each tier is capped at `TITLE_CANDIDATES = 20`. Title only decides **membership** (it never ranks the final list — the blended match % does), so each tier selects **ids only**; the per-tier similarity stays in `ORDER BY` purely to pick the top 20.
 
-**Tier 1 — exact** (`score = 1.0`):
+**Tier 1 — exact:**
 ```sql
-SELECT id, 1.0 AS score FROM "Job" WHERE lower("jobTitle") = $norm LIMIT 20
+SELECT id FROM "Job" WHERE lower("jobTitle") = $norm LIMIT 20
 ```
 
-**Tier 2 — trigram** (`score = similarity`, floor `TITLE_TRIGRAM_MIN = 0.3`):
+**Tier 2 — trigram** (floor `TITLE_TRIGRAM_MIN = 0.3`):
 ```sql
-SELECT id, similarity("jobTitle", $text) AS score FROM "Job"
+SELECT id FROM "Job"
 WHERE "jobTitle" % $text AND similarity("jobTitle", $text) >= 0.3
-ORDER BY score DESC LIMIT 20
+ORDER BY similarity("jobTitle", $text) DESC LIMIT 20
 ```
 
-**Tier 3 — vector** (`score = 1 - cosine distance`, top 20 nearest):
+**Tier 3 — vector** (top 20 nearest by cosine):
 ```sql
-SELECT id, (1 - (embedding <=> $vec::vector)) AS score FROM "Job"
+SELECT id FROM "Job"
 WHERE embedding IS NOT NULL ORDER BY embedding <=> $vec::vector LIMIT 20
 ```
 
-> The vector tier has **no similarity floor of its own** — it always returns the 20 nearest. The tier scores only decide which jobs enter the **role tier** (`titleIds`); they don't rank the final list (the blended match % does). Empty `roleText` → `[]`.
+> The vector tier has **no similarity floor of its own** — it always returns the 20 nearest. Returns the unioned ids (`titleIds`); the similarity/cosine only orders each tier's `LIMIT`, it is never returned or scored. Empty `roleText` → `[]`.
 
 ### How trigrams work
 ```
@@ -158,77 +158,75 @@ If nothing was typed (or nothing matched), search returns an empty list instead 
 
 ---
 
-## Final query — union candidate set + raw sub-score columns
+## Final query — union, blend, floor/backfill (one CTE pipeline)
 
-One `$queryRaw` over `Job JOIN Company`. The experience band is a hard filter; everything else is **OR-ed into a union**. Sub-scores come back raw and are blended in JS.
+One `$queryRaw` over `Job JOIN Company`. The experience band is a hard filter; everything else is **OR-ed into a union**. The sub-scores, the blend, the per-tier floor, and the final order/limit are **all in SQL** — so a 30-row `LIMIT` is a correct top-N by match % (the JS side is just a row→card mapper).
 
 ```sql
-SELECT j.id, j."jobTitle", c.name AS "companyName",
-       j."experienceMinYears", j."experienceMaxYears", j."focusRoundPattern",
-  CASE WHEN $hasSkills THEN cov.matched ELSE NULL END                AS "matched",
-  cov.required                                                       AS "required",
-  CASE WHEN $hasSkills THEN cov.matched::float / NULLIF(cov.required,0)
-       ELSE NULL END                                                 AS "coverage",
-  cov."projMatched"                                                  AS "projMatched",
-  CASE WHEN $hasProjVec AND j.embedding IS NOT NULL
-       THEN (1 - (j.embedding <=> $projVec::vector))::float
-       ELSE NULL END                                                 AS "projSim",
-  ( job ∈ titleIds  OR  company ∈ companyIds )                       AS "roleOrCompanyMatched"
-FROM "Job" j JOIN "Company" c ON c.id = j."companyId"
-CROSS JOIN LATERAL (
-  -- over j.requiredSkills split on , ; |
-  --   matched     = job skill tokens covered by any input skill   (ILIKE substring)
-  --   projMatched = job skill tokens found in the project text     (substring)
-  --   required    = count of non-empty job skill tokens
-) cov
-WHERE ( $experienceYears::int IS NULL
-        OR $experienceYears::int BETWEEN COALESCE(j."experienceMinYears",0)
-                                     AND COALESCE(j."experienceMaxYears",99) )  -- hard filter
-  AND ( (cardinality($titleIds)   > 0 AND j.id          = ANY($titleIds))
-     OR (cardinality($companyIds) > 0 AND j."companyId" = ANY($companyIds))
-     OR cov.matched     > 0
-     OR cov."projMatched" > 0 )                                                 -- UNION
-ORDER BY "roleOrCompanyMatched" DESC, cov.matched DESC, cov."projMatched" DESC, j."createdAt" ASC
-LIMIT 200;  -- RAW_CANDIDATE_CAP
+WITH raw AS (          -- union candidate set + raw counts/cosine + tier flag
+  SELECT j.*, c.name,
+    CASE WHEN $hasSkills THEN cov.matched ELSE NULL END               AS matched,
+    cov.required, cov."projMatched",
+    CASE WHEN $hasProjVec AND j.embedding IS NOT NULL
+         THEN (1 - (j.embedding <=> $projVec::vector))::float
+         ELSE NULL END                                                AS "projSim",
+    ( job ∈ titleIds OR company ∈ companyIds )                        AS "roleOrCompanyMatched"
+  FROM "Job" j JOIN "Company" c ON c.id = j."companyId"
+  CROSS JOIN LATERAL ( -- over j.requiredSkills split on , ; |
+    --   matched     = job skill tokens covered by any input skill  (ILIKE substring)
+    --   projMatched = job skill tokens found in the project text    (substring)
+    --   required    = count of non-empty job skill tokens
+  ) cov
+  WHERE ( $experienceYears IS NULL
+          OR $experienceYears BETWEEN COALESCE(min,0) AND COALESCE(max,99) )  -- hard filter
+    AND ( job ∈ titleIds OR company ∈ companyIds
+       OR cov.matched > 0 OR cov."projMatched" > 0 )                          -- UNION
+),
+sub AS (    SELECT *, skillsPct, projectsPct FROM raw ),     -- see Scoring below
+scored AS ( SELECT *, score = mean(non-null [skillsPct, projectsPct]) FROM sub ),
+ranked AS ( SELECT *,
+              ROW_NUMBER() OVER (PARTITION BY "roleOrCompanyMatched"
+                                 ORDER BY score DESC NULLS LAST, "createdAt") AS rn_in_tier
+            FROM scored ),
+pick AS (   SELECT * FROM ranked          -- SELECTION (which 30)
+            ORDER BY CASE WHEN $sort='default' AND rn_in_tier <= 15 THEN 0 ELSE 1 END,
+                     score DESC NULLS LAST, "createdAt"
+            LIMIT 30 )                                                        -- RESULT_LIMIT
+SELECT * FROM pick                         -- DISPLAY order
+ORDER BY CASE WHEN $sort='default' AND "roleOrCompanyMatched" THEN 0 ELSE 1 END,
+         score DESC NULLS LAST, "createdAt";
 ```
 
 ### Candidate set (which jobs qualify) — a union, not an AND
 A job enters the set if it matches **any** signal:
 
-- **Role** — `j.id ∈ titleIds` from `matchTitle` (exact ∪ trigram ∪ vector).
+- **Role** — `j.id ∈ titleIds` from `matchTitleIds` (exact ∪ trigram ∪ vector).
 - **Company** — `j."companyId" ∈ companyIds` from `matchCompanyIds`.
-- **Skills** — `coverage > 0`: the job shares ≥1 of the typed skills.
+- **Skills** — `matched > 0`: the job shares ≥1 of the typed skills.
 - **Projects** — `projMatched > 0`: ≥1 of the job's required skills appears in the resume's project text.
 
-Typing a role therefore **also** surfaces skill-matched jobs that don't match the role — they just rank below the role/company tier under the default sort. **Experience is the only hard filter**: the typed years must fall inside the job's `[min, max]` band (null input → disabled; null job bounds → open-ended `0`/`99`). Experience is never scored or shown.
-
-`roleOrCompanyMatched` records whether a job came in via the role/company tier; it drives the default sort.
+Typing a role therefore **also** surfaces skill-matched jobs that don't match the role. **Experience is the only hard filter**: the typed years must fall inside the job's `[min, max]` band (null input → disabled; null job bounds → open-ended `0`/`99`). Experience is never scored or shown. `roleOrCompanyMatched` records whether a job came in via the role/company tier; it drives the default sort and the floor.
 
 ---
 
-## Scoring — the blended match %
+## Scoring — the blended match % (computed in SQL)
 
-Computed in JS from the raw columns ([`lib/search.ts`](../lib/search.ts)). The headline `score` is the **equal mean** of whichever sub-scores apply — no weights.
+The headline `score` is the **equal mean** of whichever sub-scores apply — no weights ([`lib/search.ts`](../lib/search.ts), the `sub`/`scored` CTEs).
 
 ### Skills% (`skillsPct`)
 ```
-coverage = (job skill tokens covered by an input skill) / (job's skill-token count)
+coverage  = (job skill tokens covered by an input skill) / (job's skill-token count)
 skillsPct = round(coverage × 100)            // e.g. 5/7 → 71
 ```
-Both sides are normalized (lowercased, non-alphanumerics stripped) and matched as a substring against the job's `,`/`;`/`|`-split tokens, so `"node.js"` matches `"NodeJS"`. No skills typed → `coverage` null → `skillsPct` null.
+Both sides are normalized (lowercased, non-alphanumerics stripped) and matched as a substring against the job's `,`/`;`/`|`-split tokens, so `"node.js"` matches `"NodeJS"`. No skills typed → `skillsPct` null.
 
 ### Projects% (`projectsPct`) — hybrid, "if any"
 Only scored when the resume has project text. Distinguishes skills you *list* from skills you've *built with*:
 
 1. **Keyword overlap (primary):** `projMatched` = how many of the job's required skills appear in the project text. If `projMatched > 0` → `round(projMatched / required × 100)`.
-2. **Semantic fallback:** when keyword overlap is 0, use `simToPercent(projSim)` where `projSim = 1 − cosine(projectEmbedding, job.embedding)`. The project text is embedded once per search.
+2. **Semantic fallback:** when keyword overlap is 0, rescale `projSim = 1 − cosine(projectEmbedding, job.embedding)` across the typical resume↔JD band: `round(clamp((projSim − 0.15) / 0.55, 0, 1) × 100)`. The project text is embedded once per search.
 
 No project text → `projectsPct` null (projectless candidates aren't penalized).
-
-```ts
-// rescales the typical resume↔JD cosine band (~0.15–0.7) across 0–100
-function simToPercent(sim) { return round(clamp((sim - 0.15) / 0.55, 0, 1) * 100); }
-```
 
 ### Blend
 ```
@@ -238,16 +236,18 @@ Both null → `score` null → badge `—`. The card hover shows the `Skills%` /
 
 ---
 
-## Sort modes
+## Sort modes — and the 15-floor / backfill
 
-Sorting happens in JS after blending, then the list is sliced to `RESULT_LIMIT = 30`. The UI toggle (`Best match` / `Match score`) re-runs the search with the chosen mode.
+The blend is the SQL `ORDER BY` key, so each mode `LIMIT 30` correctly. The UI toggle (`Best match` / `Match score`) re-runs the search with the chosen mode.
 
-- **`default` (Best match):** `roleOrCompanyMatched DESC`, then `score DESC` (nulls last). Role/company matches sit on top; within a tier, higher match % wins. A role-matched job outranks a higher-scoring non-role job.
-- **`score` (Match score):** `score DESC` (nulls last), tier ignored. A higher-scoring non-role job can outrank a role-matched one.
+- **`default` (Best match):** role/company matches on top, but each tier is **guaranteed up to `TIER_FLOOR = 15` slots**, then the list **backfills toward 30** by score.
+  - *Selection* (`pick`): `rn_in_tier ≤ 15` of each tier is kept first, remaining slots filled by `score DESC`. So 40 role + 3 skill → 27 role + 3 skill (skill floor honored, role backfills); 3 role + 40 skill → 3 role + 27 skill.
+  - *Display*: role/company tier first, then by `score`.
+- **`score` (Match score):** pure `score DESC` top-30, tier ignored — a higher-scoring non-role job can top the list.
 
 > Worked example: a resume matches **JD-X** (role-name match, 5/10 skills) and **JD-Y** (no role match, 10/10 skills). `default` → JD-X above JD-Y (role tier wins). `score` → JD-Y above JD-X (higher blend).
 
-After sorting, `focusRoundPattern` is parsed into rounds and `experienceMinYears` is mapped to a display `seniority` via `deriveSeniority` (`≤2 entry`, `≤6 mid`, else `senior`).
+The thin JS mapper then parses `focusRoundPattern` into rounds and maps `experienceMinYears` to a display `seniority` via `deriveSeniority` (`≤2 entry`, `≤6 mid`, else `senior`) — no re-sorting (SQL already ordered + limited).
 
 ---
 
@@ -257,10 +257,10 @@ After sorting, `focusRoundPattern` is parsed into rounds and `experienceMinYears
 |---|---|---|
 | Title tier — exact / trigram / vector (each) | 20 | `TITLE_CANDIDATES` |
 | Company tier — exact / trigram (each) | 5 | literal |
-| Raw union candidates pulled | 200 | `RAW_CANDIDATE_CAP` |
-| Final list returned / displayed | 30 | `RESULT_LIMIT` |
+| Best-match floor — slots guaranteed per tier | 15 | `TIER_FLOOR` |
+| Final list returned / displayed (and SQL `LIMIT`) | 30 | `RESULT_LIMIT` |
 
-Skills and project keywords are **not** candidate-limited — they pull every qualifying job into the union (bounded by the 200 raw cap), which is then blended, sorted, and sliced to 30.
+Retrieval equals display: the query computes the blend in SQL and `LIMIT 30`s directly — there is no oversized candidate pool. Under `default`, each tier (role/company vs skill/project) is guaranteed up to 15 of those 30, then the other backfills toward 30. Role backfill is in turn bounded by how many ids the title tiers yield (≤20 each).
 
 ---
 

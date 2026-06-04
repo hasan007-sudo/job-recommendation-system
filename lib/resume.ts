@@ -23,7 +23,7 @@ export async function extractResumeText(file: File): Promise<string> {
     const buffer = Buffer.from(await file.arrayBuffer());
     const { value } = await mammoth.extractRawText({ buffer });
     raw = value;
-  } else if (name.endsWith(".txt") || name.endsWith(".md")) {
+  } else if (name.endsWith(".txt")) {
     raw = await file.text();
   } else {
     throw new Error("Unsupported file type. Upload a PDF, DOCX, or TXT resume.");

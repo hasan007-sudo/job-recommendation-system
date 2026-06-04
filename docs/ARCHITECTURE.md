@@ -41,10 +41,10 @@ embedding  Unsupported("vector(384)")?
 SQL (the cosine score is never stored):
 
 1. **Title tier** — `embed(roleText)` vs each job vector, top 20 nearest. Decides
-   role-tier *membership* (`titleIds`); the cosine scores don't rank the final list.
+   role-tier *membership* (`titleIds`) only, so it selects **ids**; the cosine
+   merely orders the `LIMIT` and is never returned or scored.
    ```sql
-   SELECT id, (1 - (embedding <=> $vec::vector)) AS score
-   FROM "Job" WHERE embedding IS NOT NULL
+   SELECT id FROM "Job" WHERE embedding IS NOT NULL
    ORDER BY embedding <=> $vec::vector LIMIT 20
    ```
 2. **Project semantic fallback** — `embed(projectText)` vs each candidate's job
@@ -101,12 +101,13 @@ It had incoherent units (title/company/experience were `[0,1]` but the skill ter
 was an unbounded *count* that swamped the rest) and a second, separate embedding
 cosine drove the badge — so the ranking and the displayed % could disagree.
 
-**Today the badge % is an equal, un-weighted blend of two `[0,100]` sub-scores:**
+**Today the badge % is an equal, un-weighted blend of two `[0,100]` sub-scores,
+computed in SQL (the `sub`/`scored` CTEs):**
 
 ```
 skillsPct   = round( coverage × 100 )                  // job skills you cover
 projectsPct = round( projMatched / required × 100 )    // job skills your projects show
-              ↳ else simToPercent(projSim)             // semantic fallback (Q6)
+              ↳ else rescale(projSim cosine)           // semantic fallback (Q6)
 score       = round( mean( non-null [skillsPct, projectsPct] ) )
 ```
 
@@ -115,6 +116,9 @@ score       = round( mean( non-null [skillsPct, projectsPct] ) )
   (projects excluded, not zeroed).
 - **One number, one meaning.** The same blended `score` ranks the list *and*
   labels the card; the hover shows the `Skills%` / `Projects%` split.
+- **Computed in SQL, so the limit is correct.** Because `score` is the `ORDER BY`
+  key, the query can `LIMIT 30` to a true top-N by match % — no oversized
+  candidate pool. The JS side is just a row→card mapper.
 - **Experience is not in the blend.** It stays a hard filter (Q5), so every
   returned job is already in-band — a hidden experience% would be a constant ~100%
   and tell you nothing.
@@ -187,7 +191,7 @@ and blended into the badge.
 
 ### Query: `roleText="SDE"`, `skills=["React","AWS"]`, `experience=3`, resume has projects
 
-**Step 1 — `matchTitle("SDE")` selects the role tier.** Exact and trigram miss
+**Step 1 — `matchTitleIds("SDE")` selects the role tier.** Exact and trigram miss
 ("SDE" shares no 3-grams with "Software Engineer"); the vector tier returns the
 nearest titles → they land in `titleIds` (cosine scores then discarded). Skill and
 project hits *also* enter the union, even at non-matching titles.
@@ -204,7 +208,7 @@ Job A "Software Engineer" (role tier ✓, band [2,5] ✓)
 Job B "Frontend Developer" (NOT role tier, came in via skills, band [2,4] ✓)
    requiredSkills: React, AWS, Node (3)
    skillsPct   = {React,AWS}=2 / 3  → 67
-   projectsPct = no keyword overlap → simToPercent(projSim 0.55) → 73
+   projectsPct = no keyword overlap → rescale(projSim 0.55) → 73
    score = mean(67,73) = 70     roleOrCompanyMatched = false
 ```
 
@@ -217,7 +221,10 @@ score   (Match score): B (70%)  ▸  A (29%)                ← pure blend wins
 
 Under `default`, Job A leads despite a lower %, because role precedence is the
 explicit intent; switch to `score` and Job B — the stronger overall match — takes
-the top. The list is then sliced to `RESULT_LIMIT = 30`.
+the top. `default` also guarantees each tier up to `TIER_FLOOR = 15` of the 30
+slots (then backfills by score), so skill-based jobs always get a share; `score`
+is a pure top-30 by %. Either way the SQL `LIMIT 30` (`RESULT_LIMIT`) is exact
+because the blend is the `ORDER BY` key.
 
 ```
 role tier  ─► roleOrCompanyMatched flag ─┐
