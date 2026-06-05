@@ -37,7 +37,7 @@ model JobSkill {
   jobId     String
   job       Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
   skill     String                              // normalized job skill token, e.g. "aws"
-  embedding Unsupported("vector(384)")?         // embed(expandSkill(skill))
+  embedding Unsupported("vector(512)")?         // embed(expandSkill(skill))
   @@index([jobId])
 }
 ```
@@ -65,7 +65,7 @@ for (const skill of skills) {
 ```
 
 ### `expandSkill()` — the critical detail for short acronyms
-MiniLM on a bare 3-char token (`"AWS"`, `"GCP"`, `"k8s"`) is noisy and won't sit near
+Bedrock Titan on a bare 3-char token (`"AWS"`, `"GCP"`, `"k8s"`) is noisy and won't sit near
 "cloud computing". **Expand before embedding** using a small alias map; fall back to
 the raw skill when unknown:
 

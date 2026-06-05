@@ -48,9 +48,9 @@ SQL (the cosine score is never stored):
    SELECT id FROM "Job" WHERE embedding IS NOT NULL
    ORDER BY embedding <=> $vec::vector LIMIT 20
    ```
-2. **Project semantic fallback** — `embed(projectText)` vs each candidate's job
-   vector, surfaced as `projSim = 1 - (embedding <=> $projVec)`. Used only when a
-   job's required skills have **no** keyword overlap with the project text (Q6).
+2. **Project scoring** — each project's LLM-extracted keyword string is embedded
+   separately; `projSim = MAX cosine(job.embedding, projVecLits[i])` across all
+   project vectors. Rescaled with `PROJ_SIM_FLOOR = 0.40` to filter Titan noise.
 
 `<=>` is pgvector's cosine *distance* (0 = identical, 2 = opposite); `1 - distance`
 flips it to a similarity in roughly `[0,1]` for normalized vectors. Query vectors
@@ -106,9 +106,9 @@ cosine drove the badge — so the ranking and the displayed % could disagree.
 computed in SQL (the `sub`/`scored` CTEs):**
 
 ```
-skillsPct   = round( coverage × 100 )                  // job skills you cover
-projectsPct = round( projMatched / required × 100 )    // job skills your projects show
-              ↳ else rescale(projSim cosine)           // semantic fallback (Q6)
+skillsPct   = round( coverage × 100 )                         // job skills you cover
+projectsPct = round( clamp((projSim - 0.40) / 0.60, 0, 1) × 100 )
+              // projSim = MAX cosine(job.embedding, projVecLits[i])
 score       = round( mean( non-null [skillsPct, projectsPct] ) )
 ```
 
@@ -144,13 +144,13 @@ and project keywords each pull jobs in independently (experience filters them):
 ```sql
 WHERE experience-band
   AND ( job ∈ titleIds  OR  company ∈ companyIds
-     OR cov.matched > 0  OR cov."projMatched" > 0 )
+     OR cov.matched > 0 )
 ```
 
 ```
             role?  company?  skills?  → result
-A (skills)    no      no       yes    → in-band jobs sharing ≥1 skill (or project hit), by blend
-B (role/co)   yes     yes      no     → role/company jobs (+ any skill/project hits), badge "—" where unscored
+A (skills)    no      no       yes    → in-band jobs sharing ≥1 skill, by blend
+B (role/co)   yes     yes      no     → role/company jobs (+ any skill hits), badge "—" where unscored
 C (combined)  yes     no       yes    → title matches ∪ skill matches, in one ranked list
 D (empty)     no      no       no     → []  (guard)
 ```
@@ -209,20 +209,22 @@ Job A "Software Engineer" (role tier ✓, band [2,5] ✓)
 Job B "Frontend Developer" (NOT role tier, came in via skills, band [2,4] ✓)
    requiredSkills: React, AWS, Node (3)
    skillsPct   = {React,AWS}=2 / 3  → 67
-   projectsPct = no keyword overlap → rescale(projSim 0.55) → 73
-   score = mean(67,73) = 70     roleOrCompanyMatched = false
+   projectsPct = MAX cosine(projVecLits, job.embedding) = 0.62
+               → clamp((0.62-0.40)/0.60, 0, 1) × 100 → 37
+   score = mean(67,37) = 52     roleOrCompanyMatched = false
 ```
 
 **Step 3 — sort.**
 
 ```
-default (Best match):  A (role tier, 29%)  ▸  B (70%)     ← role precedence wins
-score   (Match score): B (70%)  ▸  A (29%)                ← pure blend wins
+default (Best match):  A (role tier, 29%)  ▸  B (52%)     ← role precedence wins
+score   (Match score): B (52%)  ▸  A (29%)                ← pure blend wins
 ```
 
 Under `default`, Job A leads despite a lower %, because role precedence is the
 explicit intent; switch to `score` and Job B — the stronger overall match — takes
-the top. `default` also guarantees each tier up to `TIER_FLOOR = 15` of the 30
+the top. (Job B's `projectsPct` uses the MAX cosine of the project keyword vectors
+against the job embedding, rescaled above `PROJ_SIM_FLOOR = 0.40`.) `default` also guarantees each tier up to `TIER_FLOOR = 15` of the 30
 slots (then backfills by score), so skill-based jobs always get a share; `score`
 is a pure top-30 by %. Either way the SQL `LIMIT 30` (`RESULT_LIMIT`) is exact
 because the blend is the `ORDER BY` key.

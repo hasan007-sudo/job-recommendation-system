@@ -28,9 +28,6 @@ const TIER_FLOOR = 15;
 // background similarity of ~0.10–0.20 even for unrelated texts; anything below
 // this is noise. Raise to tighten relevance, lower to widen it.
 const PROJ_SIM_FLOOR = 0.4;
-// Upper end of the similarity band mapped to 100%. Similarities above this are
-// treated as a perfect project match.
-const PROJ_SIM_CEIL = 0.7;
 
 function normalize(text: string): string {
   return text
@@ -256,7 +253,7 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
         CASE WHEN ${hasSkills} AND required > 0
              THEN round(matched::numeric / required * 100)::int END AS "skillsPct",
         CASE WHEN ${hasProjVecs} AND "projSim" IS NOT NULL
-             THEN round((greatest(0, least(1, ("projSim" - ${PROJ_SIM_FLOOR}) / ${PROJ_SIM_CEIL - PROJ_SIM_FLOOR})) * 100)::numeric)::int
+             THEN round((greatest(0, least(1, ("projSim" - ${PROJ_SIM_FLOOR}) / ${1.0 - PROJ_SIM_FLOOR})) * 100)::numeric)::int
              ELSE NULL
         END AS "projectsPct"
       FROM raw

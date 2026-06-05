@@ -1,134 +1,147 @@
 # Project-based retrieval & scoring
 
-How a candidate's **project text** (resume project names + descriptions) affects job
-search. Companion to [`search.md`](./search.md) and [`ARCHITECTURE.md`](./ARCHITECTURE.md).
-All logic lives in [`lib/search.ts`](../lib/search.ts).
+How a candidate's **project experience** affects job search results.
+All logic lives in [`lib/search.ts`](../lib/search.ts),
+[`lib/resume.ts`](../lib/resume.ts), and [`lib/onboarding.ts`](../lib/onboarding.ts).
 
-> **TL;DR** — Projects do two jobs: they can **get** a job into the result set
-> (candidacy) and they **score** it (half the match %). "Getting" uses *keyword*
-> overlap only; "scoring" uses keyword overlap, falling back to a *coarse* embedding
-> cosine. Synonyms (e.g. `AWS` ↔ "cloud computing") are **not** matched at the skill
-> level today — see [Limitations](#limitations).
-
----
-
-## Where project text comes from
-
-```
-resume parse → profile.projects[]            // {name, description} → "name · description"
-  └ deriveSearchInput (lib/onboarding.ts)     // projectText = profile.projects.join(". ")
-      └ POST /api/search { projectText }
-          └ searchJobs(input)  (lib/search.ts)
-```
-
-There is no UI field to type project text — it always rides along from the parsed
-resume. Two values are derived once per request (`searchJobs`):
-
-```
-projTextNorm = projectText.toLowerCase().replace(/[^a-z0-9]/g, "")   // for keyword matching
-projVec      = embed(projectText)                                    // for the cosine fallback
-```
-
-`projTextNorm` strips **all** non-alphanumerics (including spaces) into one blob, e.g.
-`"Built with React, Docker"` → `"builtwithreactdocker"`.
+> **TL;DR** — At resume parse time an LLM extracts 3–8 domain skills/tech concepts
+> per project (e.g. `["real-time systems", "WebSocket", "event-driven architecture"]`).
+> Each project gets its own embedding. At search time, `projectsPct` = MAX cosine
+> similarity between the job and any single project's embedding, rescaled to [0–100].
+> Projects only **score** candidates — they do **not** pull new jobs into the result set.
 
 ---
 
-## Two roles: getting vs scoring
+## Where project keywords come from
 
-| | GETTING (candidacy) | SCORING (the %) |
-|---|---|---|
-| Signal used | `projMatched` (keyword) only | `projMatched` → else `projSim` (cosine) |
-| Effect | adds the job to the union set | sets `projectsPct`, half the blend |
+```
+Resume upload
+  → analyzeResume() [OpenRouter LLM]          lib/resume.ts
+      extracts: projects[i].keywords = ["real-time systems", "WebSocket", ...]
+  → mapToProfile()
+      profile.projects        = ["Name · description", ...]   // display only
+      profile.projectKeywords = [["real-time systems", ...], [...]]
 
-**Getting** — the `raw` CTE `WHERE` (union):
+  → sessionStorage "rounds:profile"
+
+User confirms → deriveSearchInput(profile)     lib/onboarding.ts
+      projectTexts = projectKeywords.map(kws => kws.join(", "))
+      // ["real-time systems, WebSocket, event-driven architecture", ...]
+
+  → sessionStorage "rounds:autosearch"
+  → POST /api/search { projectTexts: string[] }
+  → searchJobs(input)                          lib/search.ts
+```
+
+**Fallback for old sessions** (profile cached before this feature): if
+`projectKeywords` is absent, `deriveSearchInput` falls back to
+`[profile.projects.join(". ")]` — raw prose as a single entry.
+
+---
+
+## LLM keyword extraction
+
+The resume analysis prompt instructs the model to add a `keywords` field to each
+project object:
+
+```json
+"projects": [
+  {
+    "name": "Real-time Notification System",
+    "description": "...",
+    "keywords": ["real-time systems", "push notifications", "WebSocket", "event-driven architecture"]
+  }
+]
+```
+
+Rules enforced by the prompt:
+- 3–8 keywords per project.
+- Domain skills and tech concepts only — no soft skills, team size, awards, or process words.
+
+---
+
+## Scoring: per-project embedding + MAX cosine
+
+**Embedding (one Bedrock Titan call per project):**
+```ts
+projVecLits = await Promise.all(
+  projectTexts.map(t => embed(t).then(toPgVectorLiteral))
+)
+// ["[0.12, 0.34, ...]", "[0.56, 0.78, ...]", ...]
+```
+
+**SQL — `projSim` (raw CTE):**
 ```sql
-WHERE <experience band>                    -- hard filter
-  AND ( job ∈ titleIds OR company ∈ companyIds
-     OR cov.matched     > 0
-     OR cov."projMatched" > 0 )            -- ← projects can qualify a job alone (keyword only)
+CASE WHEN ${hasProjVecs} AND j.embedding IS NOT NULL
+     THEN (
+       SELECT MAX((1 - (j.embedding <=> pv::vector))::float)
+       FROM unnest(${projVecLits}::text[]) AS pv
+     )
+     ELSE NULL
+END AS "projSim"
 ```
 
-**Scoring** — `sub` → `scored` CTEs:
+MAX means the job is scored against its **most relevant** project — one highly
+related project is not diluted by unrelated ones.
+
+**Rescaling — `projectsPct` (sub CTE):**
 ```
-projMatched = COUNT(job's normalized skill tokens that appear as a substring in projTextNorm)
-projectsPct = projMatched > 0  → round(projMatched / required × 100)     -- keyword path
-              else projSim≠null → rescale(projSim)                        -- coarse cosine fallback
-              else             → null
-score       = round( mean( non-null [skillsPct, projectsPct] ) )         -- equal blend, no weights
+projectsPct = max(0, min(1, (projSim - FLOOR) / (1.0 - FLOOR))) × 100
 ```
 
-- `projSim = 1 - (job.embedding <=> projVec)` — cosine similarity of the **whole project
-  text** vs the **whole job composite embedding** (title + roleType + summary + skills).
-- `rescale(x) = round(greatest(0, least(1, (x - 0.15) / 0.55)) × 100)` — maps the useful
-  cosine band (~0.15–0.70) onto 0–100.
-- **Key:** `projSim` only ever *scores* a job already in the set. It **never** pulls a job
-  in. A job with `matched = 0` **and** `projMatched = 0` is excluded — its cosine is moot.
+Constant in `lib/search.ts`:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `PROJ_SIM_FLOOR` | `0.40` | Below this → 0 %. Filters background Titan noise (~0.10–0.20). |
+
+The ceiling is always `1.0` (the max possible cosine), so scores scale naturally
+across the full remaining range. Tune `PROJ_SIM_FLOOR` upward to tighten
+relevance, downward to widen it.
+
+**Blend:**
+```
+score = round( mean( non-null [skillsPct, projectsPct] ) )
+```
 
 ---
 
-## Worked examples
+## Worked example
 
-Resume:
-```
-skills typed : React, AWS
-projects     : "Realtime dashboard · built with React, Docker, WebSockets"
-               "ML recommender · collaborative filtering in Python"
-experience   : 3 yrs
-projTextNorm : "realtimedashboardbuiltwithreactdockerwebsocketsmlrecommender
-                collaborativefilteringinpython"
-```
+Resume project: "Real-time Notification System · notifications for tickets and chats"
 
-### A — projects confirm depth
-**"Frontend Engineer" · requiredSkills: React, AWS, Docker, TypeScript (4)**
-```
-matched     : React✓ AWS✓             = 2 → skillsPct   = 2/4 = 50
-projMatched : react✓ docker✓          = 2 → projectsPct = 2/4 = 50   (keyword)
-score = mean(50, 50) = 50
-```
-You don't just *list* React — your projects *use* React + Docker. Projects hold/raise the %.
+LLM extracts keywords: `["real-time systems", "push notifications", "WebSocket", "ticketing systems"]`
 
-### B — projects pull a job IN that skills alone wouldn't
-**"ML Engineer" · requiredSkills: Python, TensorFlow, Recommender (3)** — no typed-skill overlap
-```
-matched     : (React/AWS don't hit)   = 0 → skillsPct   = 0
-projMatched : python✓                 = 1 → projectsPct = 1/3 = 33   (keyword)
-score = mean(0, 33) = 17
-```
-`matched = 0`, but `projMatched > 0` adds it to the candidate set. Note the blend **halves**
-it: once skills are typed, `skillsPct` is `0` (not absent) and averages in. So project-only
-matches appear but rank modestly.
+`projectTexts[0]` = `"real-time systems, push notifications, WebSocket, ticketing systems"`
 
-### C — semantic fallback (job already in the set via skills)
-**"Cloud Engineer" · requiredSkills: AWS, Lambda, DynamoDB (3)** — no project keyword overlap
-```
-matched     : AWS✓                    = 1 → skillsPct   = 1/3 = 33
-projMatched : (none in projText)      = 0
-projSim     : cosine(projVec, jobC.embedding) = 0.22 → rescale → 13
-projectsPct = 13   (← fallback, because projMatched = 0)
-score = mean(33, 13) = 23
-```
-With no keyword overlap, projects still contribute a soft topical signal via the cosine —
-but only because the job was already in the set (via `AWS`).
+Embedded → vector `V_proj`.
+
+| Job | projSim | projectsPct |
+|---|---|---|
+| Backend Engineer (Node, WebSocket, Redis) | 0.61 | `round((0.61-0.40)/0.30 × 100)` = **70 %** |
+| IT Consulting (Java, Spring, Kubernetes) | 0.18 | below floor → **0 %** |
+| Mobile Developer (Swift, UIKit) | 0.12 | below floor → **0 %** |
+
+---
+
+## What projects do NOT do
+
+- **Projects do not add jobs to the candidate set.** A job enters results only via
+  title/company/skills match. The project score ranks it higher or lower within
+  that set.
+- **No keyword substring matching.** The old `projMatched` / `projTextNorm` approach
+  (which caused tokens like "real" and "time" to match unrelated skill tokens) has
+  been removed entirely.
 
 ---
 
 ## Limitations
 
-1. **No skill-level synonym matching.** The keyword path is literal substring matching, so
-   `AWS` (job) vs "cloud computing" (project) **fails** — different characters. It will only
-   hit if your project text literally contains the token `aws`.
-2. **The cosine fallback is coarse and conditional.** `projSim` compares the *entire* project
-   blob to the *entire* job composite embedding (dominated by title/summary, not skills), and
-   it only fires when `projMatched = 0` for the whole job. It nudges the score for broadly
-   related projects; it does **not** say "your cloud project covers the AWS requirement."
-   If even one job skill keyword-hits, the cosine is ignored entirely.
-3. **Substring fuzziness.** `projTextNorm` removes spaces, so short tokens (`go`, `r`, `c`)
-   can match inside unrelated words. Same caveat as the skills `LIKE` match.
-4. **Whole-blob embedding dilution.** A multi-project résumé embeds into one vector; a single
-   job's relevance can be washed out by unrelated projects.
-
-> Per-skill semantic matching (embed each job skill, compare to the project) would address
-> #1 but is **not** implemented — see the note in the chat / `search.md` for the trade-offs
-> (short-acronym embeddings, per-skill vectors at import time, threshold tuning).
-</content>
+1. **Keyword quality depends on the LLM.** Vague project descriptions produce vague
+   keywords; detailed descriptions produce more discriminating vectors.
+2. **Titan embedding space.** Cosine similarity between loosely related domains can
+   still be 0.35–0.45, so `PROJ_SIM_FLOOR` requires ongoing calibration as more
+   jobs are indexed.
+3. **Projects don't open the candidate pool.** A candidate whose only relevant
+   experience is in projects (no overlapping skills or role) won't see those jobs
+   unless they also appear in the skill/title match.

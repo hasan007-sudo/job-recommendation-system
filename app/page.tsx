@@ -79,9 +79,10 @@ export default function HomePage() {
         if (p.experienceYears != null)
           setExperienceYears(String(p.experienceYears));
         if (p.projectKeywords?.length)
-          setProjectTexts(p.projectKeywords.map((kws) => kws.join(", ")).filter(Boolean));
-        else if (p.projects?.length)
-          setProjectTexts([p.projects.join(". ")]);
+          setProjectTexts(
+            p.projectKeywords.map((kws) => kws.join(", ")).filter(Boolean),
+          );
+        else if (p.projects?.length) setProjectTexts([p.projects.join(". ")]);
       } catch {
         // ignore
       }
@@ -350,7 +351,7 @@ export default function HomePage() {
                 </div>
               </Field>
 
-              <Field label="Projects">
+              <Field label="Projects skills">
                 <textarea
                   value={projectTexts.join(", ")}
                   onChange={(e) =>
