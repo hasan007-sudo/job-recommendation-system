@@ -1,7 +1,9 @@
-// Group 7 — Score filtering and ranking order
-// Verifies that rows with totalScore = 0 are dropped, that the returned array
-// preserves descending score order from the SQL, and that the score field on
-// each JobCard matches the totalScore from the raw SQL row.
+// Group 7 — Ranking order and score passthrough
+// The candidate filtering and ordering happen in SQL; searchJobs does not re-rank
+// or drop rows. These tests verify that the returned array preserves the SQL's
+// order and that each JobCard.score equals the score from the raw SQL row.
+// (Whether a low/zero-coverage row is excluded is a SQL concern — WHERE
+// cov.matched > 0 — and is covered by the pgvector integration suite.)
 
 import { describe, it, expect, beforeEach, type Mock } from "vitest";
 import { vi } from "vitest";
@@ -30,52 +32,14 @@ function mockRoleOnly(finalRows: ReturnType<typeof makeRow>[]) {
     .mockResolvedValueOnce(finalRows); // final ranking SQL
 }
 
-describe("score filtering", () => {
-  it("drops rows where totalScore = 0 (matched filter but scored nothing)", async () => {
-    // A job can survive the WHERE clause (its id was in titleIds) but still score 0
-    // if title weight × 0-score + no other terms = 0. Such rows must be filtered.
-    mockRoleOnly([
-      makeRow({ jobId: "job-1", totalScore: 2.0 }),
-      makeRow({ jobId: "job-2", totalScore: 0 }),
-    ]);
-
-    const result = await searchJobs({
-      roleText: "Engineer",
-      companyText: "",
-      skillNames: [],
-      experienceYears: null,
-    });
-
-    expect(result).toHaveLength(1);
-    expect(result[0]!.jobId).toBe("job-1");
-  });
-
-  it("returns [] when every row has totalScore = 0", async () => {
-    // All rows are dropped by the post-SQL filter → empty result.
-    mockRoleOnly([
-      makeRow({ totalScore: 0 }),
-      makeRow({ totalScore: 0 }),
-    ]);
-
-    const result = await searchJobs({
-      roleText: "Engineer",
-      companyText: "",
-      skillNames: [],
-      experienceYears: null,
-    });
-
-    expect(result).toEqual([]);
-  });
-});
-
 describe("ranking order", () => {
-  it("preserves descending totalScore order from the SQL result (highest score first)", async () => {
-    // The SQL returns rows already ordered by totalScore DESC. searchJobs must
-    // not reorder them during the mapping step.
+  it("preserves the SQL result order (highest score first, no re-ranking)", async () => {
+    // The SQL returns rows already ordered by score DESC. searchJobs must not
+    // reorder them during the mapping step.
     mockRoleOnly([
-      makeRow({ jobId: "job-a", totalScore: 5.0 }),
-      makeRow({ jobId: "job-b", totalScore: 3.0 }),
-      makeRow({ jobId: "job-c", totalScore: 1.5 }),
+      makeRow({ jobId: "job-a", score: 90 }),
+      makeRow({ jobId: "job-b", score: 60 }),
+      makeRow({ jobId: "job-c", score: 30 }),
     ]);
 
     const result = await searchJobs({
@@ -90,9 +54,13 @@ describe("ranking order", () => {
     expect(result[2]!.jobId).toBe("job-c");
   });
 
-  it("the score field on each JobCard equals the totalScore from the SQL row", async () => {
-    // Verifies the mapping: row.totalScore → card.score (no transformation).
-    mockRoleOnly([makeRow({ jobId: "job-1", totalScore: 3.75 })]);
+  it("returns rows untouched — does not drop a null-score row", async () => {
+    // searchJobs no longer post-filters by score; a row whose blended score is
+    // null (no skills/projects criteria applied) still maps through.
+    mockRoleOnly([
+      makeRow({ jobId: "job-1", score: 70 }),
+      makeRow({ jobId: "job-2", score: null, skillsPct: null, projectsPct: null }),
+    ]);
 
     const result = await searchJobs({
       roleText: "Engineer",
@@ -101,6 +69,22 @@ describe("ranking order", () => {
       experienceYears: null,
     });
 
-    expect(result[0]!.score).toBe(3.75);
+    expect(result).toHaveLength(2);
+    expect(result[1]!.jobId).toBe("job-2");
+    expect(result[1]!.score).toBeNull();
+  });
+
+  it("the score field on each JobCard equals the score from the SQL row", async () => {
+    // Verifies the mapping: row.score → card.score (no transformation).
+    mockRoleOnly([makeRow({ jobId: "job-1", score: 75 })]);
+
+    const result = await searchJobs({
+      roleText: "Engineer",
+      companyText: "",
+      skillNames: [],
+      experienceYears: null,
+    });
+
+    expect(result[0]!.score).toBe(75);
   });
 });

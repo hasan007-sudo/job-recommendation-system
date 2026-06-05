@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
@@ -16,6 +17,7 @@ import {
   EMPTY_PROFILE,
   type OnboardingProfile,
 } from "../../lib/onboarding";
+import { postForm } from "../../lib/api";
 
 type Step = "upload" | "profile";
 type ParseState = "idle" | "parsing" | "done" | "error";
@@ -29,29 +31,37 @@ export default function OnboardingPage() {
   const [parseSecs, setParseSecs] = useState(0);
   const [error, setError] = useState("");
 
-  async function handleFile(file: File) {
-    setFileName(file.name);
-    setParseState("parsing");
-    setError("");
-    const started = Date.now();
-    try {
+  const parseMutation = useMutation({
+    mutationFn: (file: File) => {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch("/api/onboarding/parse", {
-        method: "POST",
-        body: fd,
-      });
-      const data = await res.json();
-      if (!res.ok)
-        throw new Error(data.error ?? "Could not parse this résumé.");
+      return postForm<{ profile: OnboardingProfile }>(
+        "/api/onboarding/parse",
+        fd,
+      );
+    },
+    onMutate: (file) => {
+      setFileName(file.name);
+      setParseState("parsing");
+      setError("");
+      return { started: Date.now() };
+    },
+    onSuccess: (data, _file, ctx) => {
       setProfile(data.profile);
-      setParseSecs(Math.max(1, Math.round((Date.now() - started) / 1000)));
+      setParseSecs(
+        Math.max(1, Math.round((Date.now() - (ctx?.started ?? Date.now())) / 1000)),
+      );
       setParseState("done");
       setStep("profile");
-    } catch (e) {
+    },
+    onError: (e) => {
       setParseState("error");
       setError(e instanceof Error ? e.message : "Could not parse this résumé.");
-    }
+    },
+  });
+
+  function handleFile(file: File) {
+    parseMutation.mutate(file);
   }
 
   function confirmAndContinue() {

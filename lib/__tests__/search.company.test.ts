@@ -28,10 +28,10 @@ beforeEach(() => {
 describe("company-only search", () => {
   it("returns jobs when company name matches exactly (no trigram fallback needed)", async () => {
     // Exact match on company name — matchCompanyIds returns immediately after call 1.
-    // Final SQL applies the +1.5 company weight to all matching jobs.
+    // All jobs at that company enter the candidate set via the company tier.
     q()
       .mockResolvedValueOnce([makeCompanyExact("company-1")]) // company exact
-      .mockResolvedValueOnce([makeRow({ companyName: "Google", totalScore: 1.5 })]); // final
+      .mockResolvedValueOnce([makeRow({ companyName: "Google" })]); // final
 
     const result = await searchJobs({
       roleText: "",
@@ -52,7 +52,7 @@ describe("company-only search", () => {
     q()
       .mockResolvedValueOnce([])                                      // company exact
       .mockResolvedValueOnce([makeCompanyTrigram("company-1", 0.5)])  // company trigram
-      .mockResolvedValueOnce([makeRow({ companyName: "Google", totalScore: 1.5 })]); // final
+      .mockResolvedValueOnce([makeRow({ companyName: "Google" })]); // final
 
     const result = await searchJobs({
       roleText: "",

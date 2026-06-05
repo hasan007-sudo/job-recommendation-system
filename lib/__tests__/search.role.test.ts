@@ -27,14 +27,14 @@ beforeEach(() => {
 });
 
 describe("role-only search", () => {
-  it("returns a job when the exact title tier matches (score = 1.0, weighted × 2.0 = 2.0)", async () => {
-    // Exact match fires first; trigram and vector return nothing.
-    // Final SQL returns one row with totalScore reflecting the exact title match.
+  it("surfaces a job when the exact title tier matches", async () => {
+    // Exact match fires first; trigram and vector return nothing. Title only
+    // decides membership — the blended score is whatever the final SQL returns.
     q()
       .mockResolvedValueOnce([makeMatch("job-1", 1.0)]) // title exact
       .mockResolvedValueOnce([])                         // title trigram
       .mockResolvedValueOnce([])                         // title vector
-      .mockResolvedValueOnce([makeRow({ jobId: "job-1", totalScore: 2.0 })]); // final
+      .mockResolvedValueOnce([makeRow({ jobId: "job-1", score: 80 })]); // final
 
     const result = await searchJobs({
       roleText: "Software Engineer",
@@ -45,17 +45,17 @@ describe("role-only search", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]!.jobId).toBe("job-1");
-    expect(result[0]!.score).toBe(2.0);
+    expect(result[0]!.score).toBe(80);
   });
 
-  it("returns a job when only the trigram tier matches (catches typos and partials)", async () => {
-    // Exact fails; trigram similarity 0.7 → totalScore = 2.0 × 0.7 = 1.4.
-    // This validates that fuzzy title matching still surfaces relevant jobs.
+  it("surfaces a job when only the trigram tier matches (catches typos and partials)", async () => {
+    // Exact fails; only the trigram tier returns the job id. Validates that fuzzy
+    // title matching still pulls the job into the candidate set.
     q()
       .mockResolvedValueOnce([])                          // title exact
       .mockResolvedValueOnce([makeMatch("job-1", 0.7)])   // title trigram
       .mockResolvedValueOnce([])                          // title vector
-      .mockResolvedValueOnce([makeRow({ jobId: "job-1", totalScore: 1.4 })]); // final
+      .mockResolvedValueOnce([makeRow({ jobId: "job-1", score: 70 })]); // final
 
     const result = await searchJobs({
       roleText: "Softwre Enginer", // intentional typo
@@ -65,17 +65,17 @@ describe("role-only search", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0]!.score).toBeCloseTo(1.4);
+    expect(result[0]!.jobId).toBe("job-1");
   });
 
-  it("returns a job when only the vector tier matches (catches semantic synonyms like 'SDE')", async () => {
+  it("surfaces a job when only the vector tier matches (catches semantic synonyms like 'SDE')", async () => {
     // Exact and trigram miss because 'SDE' shares no 3-grams with 'Software Engineer'.
-    // Vector (cosine sim 0.62) is the only hit → totalScore = 2.0 × 0.62 = 1.24.
+    // The semantic (vector ANN) tier is the only one that pulls the job in.
     q()
       .mockResolvedValueOnce([])                           // title exact
       .mockResolvedValueOnce([])                           // title trigram
       .mockResolvedValueOnce([makeMatch("job-1", 0.62)])   // title vector
-      .mockResolvedValueOnce([makeRow({ jobId: "job-1", totalScore: 1.24 })]); // final
+      .mockResolvedValueOnce([makeRow({ jobId: "job-1", score: 62 })]); // final
 
     const result = await searchJobs({
       roleText: "SDE",
@@ -85,18 +85,17 @@ describe("role-only search", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0]!.score).toBeCloseTo(1.24);
+    expect(result[0]!.jobId).toBe("job-1");
   });
 
   it("returns a job when all three tiers match — embed() is always called for role text", async () => {
-    // All three tiers return the same job with different scores.
-    // The keepMax logic in matchTitle picks the highest (exact = 1.0).
-    // We verify: embed() was called once, and the function returns a result.
+    // All three tiers return the same job id; matchTitleIds dedupes them into a
+    // single candidate. We verify: embed() was called once, and a result returns.
     q()
       .mockResolvedValueOnce([makeMatch("job-1", 1.0)])  // title exact
       .mockResolvedValueOnce([makeMatch("job-1", 0.8)])  // title trigram
       .mockResolvedValueOnce([makeMatch("job-1", 0.9)])  // title vector
-      .mockResolvedValueOnce([makeRow({ jobId: "job-1", totalScore: 2.0 })]); // final
+      .mockResolvedValueOnce([makeRow({ jobId: "job-1" })]); // final
 
     const result = await searchJobs({
       roleText: "Software Engineer",

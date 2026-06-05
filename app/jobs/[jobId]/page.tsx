@@ -1,10 +1,12 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import type { ParsedRound } from "../../../lib/rounds";
 import { formatExperience, matchPill, initials } from "../../../lib/display";
+import { getJson } from "../../../lib/api";
 
 type Item = { title: string; description: string };
 type Group = { name: string; items: Item[] };
@@ -50,23 +52,13 @@ function groupTone(name: string): { label: string; color: string } {
 export default function JobDetailPage({ params }: { params: Promise<{ jobId: string }> }) {
   const { jobId } = use(params);
   const router = useRouter();
-  const [detail, setDetail] = useState<JobDetail | null>(null);
-  const [error, setError] = useState("");
   const [matchPercent, setMatchPercent] = useState<number | undefined>(undefined);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`/api/jobs/${jobId}`)
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Could not load job.");
-        if (!cancelled) setDetail(data);
-      })
-      .catch((e) => !cancelled && setError(e.message));
-    return () => {
-      cancelled = true;
-    };
-  }, [jobId]);
+  const { data: detail, error: queryError } = useQuery({
+    queryKey: ["job", jobId],
+    queryFn: () => getJson<JobDetail>(`/api/jobs/${jobId}`),
+  });
+  const error = queryError instanceof Error ? queryError.message : "";
 
   useEffect(() => {
     // The list page already computed and cached this score — reuse it. On a

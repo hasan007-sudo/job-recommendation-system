@@ -1,7 +1,10 @@
 // Group 5 — Skills-only search
 // Skills bypass the embedding pipeline entirely and are matched via substring LIKE
-// in the final ranking SQL. Tests verify: literal match, multi-skill scoring,
-// zero-match filtering, and blank-string stripping.
+// in the final ranking SQL. These mocked tests cover the JS-side behaviour:
+// no title/company queries run, embed() is never called, and the single final
+// SQL result is mapped through verbatim (order preserved).
+// The actual skill-coverage scoring and the WHERE cov.matched > 0 exclusion live
+// in SQL and are covered by the pgvector integration suite, not here.
 //
 // $queryRaw call order for skills-only (no roleText, no companyText):
 //   CALL 1 → final ranking SQL only (no title or company queries run)
@@ -25,11 +28,13 @@ beforeEach(() => {
 });
 
 describe("skills-only search", () => {
-  it("returns a job when a single skill has a literal substring match in requiredSkills", async () => {
-    // Guard passes because skillNames is non-empty.
-    // No title or company queries run — only the final ranking SQL.
-    // The SQL mock simulates a job that matched 1 skill (totalScore = 1.0 × 1 = 1.0).
-    q().mockResolvedValueOnce([makeRow({ totalScore: 1.0 })]);
+  it("runs only the final SQL (no title/company queries, no embed) for a skills-only search", async () => {
+    // Guard passes because skillNames is non-empty. No title or company queries
+    // run — only the final ranking SQL — and embed() is never called. The mapped
+    // row carries the SQL-computed skill coverage straight through.
+    q().mockResolvedValueOnce([
+      makeRow({ matched: 1, required: 1, skillsPct: 100, score: 100 }),
+    ]);
 
     const result = await searchJobs({
       roleText: "",
@@ -39,42 +44,13 @@ describe("skills-only search", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0]!.score).toBe(1.0);
+    expect(result[0]!.score).toBe(100);
+    expect(result[0]!.matchedSkills).toBe(1);
+    expect(result[0]!.totalSkills).toBe(1);
     // embed must NOT be called — no roleText
     expect(embed).not.toHaveBeenCalled();
     // Only 1 DB call (final SQL)
     expect(q()).toHaveBeenCalledTimes(1);
-  });
-
-  it("scores higher when multiple skills match (each matched skill adds 1.0)", async () => {
-    // Two skills both found in requiredSkills → totalScore = 1.0 × 2 = 2.0.
-    // Verifies that skill count (not presence) drives the score.
-    q().mockResolvedValueOnce([makeRow({ totalScore: 2.0 })]);
-
-    const result = await searchJobs({
-      roleText: "",
-      companyText: "",
-      skillNames: ["React", "Node.js"],
-      experienceYears: null,
-    });
-
-    expect(result[0]!.score).toBe(2.0);
-  });
-
-  it("returns [] when no job's requiredSkills contain the typed skill (totalScore = 0 filtered out)", async () => {
-    // The guard passes (skills non-empty), the SQL runs, but the mock returns a row
-    // with totalScore = 0 (no literal match). The post-SQL filter drops it.
-    // This simulates searching for a skill like "K8s" when all jobs say "Kubernetes".
-    q().mockResolvedValueOnce([makeRow({ totalScore: 0 })]);
-
-    const result = await searchJobs({
-      roleText: "",
-      companyText: "",
-      skillNames: ["K8s"],
-      experienceYears: null,
-    });
-
-    expect(result).toEqual([]);
   });
 
   it("returns [] and makes no DB calls when all skill entries are blank strings", async () => {
@@ -91,12 +67,12 @@ describe("skills-only search", () => {
     expect(q()).not.toHaveBeenCalled();
   });
 
-  it("returns multiple jobs ordered by descending skill-match count", async () => {
-    // Two jobs: job-2 matched both skills (score 2.0), job-1 matched one (score 1.0).
-    // The mock returns them already ordered by totalScore DESC (as the SQL would).
+  it("preserves the SQL result order across multiple jobs", async () => {
+    // The SQL returns rows already ranked (job-2 above job-1). searchJobs maps them
+    // through without reordering, so the array order is preserved.
     q().mockResolvedValueOnce([
-      makeRow({ jobId: "job-2", totalScore: 2.0 }),
-      makeRow({ jobId: "job-1", totalScore: 1.0 }),
+      makeRow({ jobId: "job-2", skillsPct: 100, score: 100 }),
+      makeRow({ jobId: "job-1", skillsPct: 50, score: 50 }),
     ]);
 
     const result = await searchJobs({

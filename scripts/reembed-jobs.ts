@@ -6,7 +6,8 @@ import { embed, toPgVectorLiteral } from "../lib/embeddings";
 // One-time re-embed after switching the embedding model (MiniLM 384 -> Titan 512).
 // Reads jobs from the target DB and rebuilds the composite text from stored
 // columns (no dependency on SOURCE_DATABASE_URL). Run after migrate-embedding-512.sql.
-//   bun run tsx scripts/reembed-jobs.ts
+//   bun run tsx scripts/reembed-jobs.ts              # all jobs
+//   bun run tsx scripts/reembed-jobs.ts <jobId>      # one job
 
 const connectionString = process.env.ROUND_DB_URL;
 if (!connectionString) throw new Error("ROUND_DB_URL is required");
@@ -40,10 +41,13 @@ async function embedWithRetry(text: string, attempt = 0): Promise<number[]> {
 }
 
 async function main() {
+  const jobId = process.argv[2];
   const jobs = await prisma.job.findMany({
+    where: jobId ? { id: jobId } : undefined,
     select: { id: true, jobTitle: true, roleType: true, roleSummary: true, requiredSkills: true },
   });
-  console.log(`Re-embedding ${jobs.length} jobs...`);
+  if (jobId && jobs.length === 0) throw new Error(`No job found with id ${jobId}`);
+  console.log(`Re-embedding ${jobs.length} job(s)...`);
 
   let done = 0;
   for (const job of jobs) {

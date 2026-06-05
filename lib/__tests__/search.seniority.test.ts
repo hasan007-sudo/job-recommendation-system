@@ -2,8 +2,14 @@
 // Pure function with no DB dependency; tests all boundary values for the
 // entry / mid / senior classification based on experienceMinYears.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { deriveSeniority } from "../search";
+
+// deriveSeniority is pure, but importing ../search transitively loads ../prisma,
+// which throws at import time unless ROUND_DB_URL is set. Mock the side-effectful
+// modules (as the sibling test files do) so this pure-function suite runs anywhere.
+vi.mock("../prisma", () => ({ prisma: { $queryRaw: vi.fn() } }));
+vi.mock("../embeddings", () => ({ embed: vi.fn(), toPgVectorLiteral: vi.fn() }));
 
 describe("deriveSeniority", () => {
   it("returns 'entry' when experienceYears is null (no data from resume)", () => {

@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Loader2, X } from "lucide-react";
 import type { OnboardingProfile } from "../lib/onboarding";
 import type { ParsedRound } from "../lib/rounds";
 import { formatExperience, tierFor } from "../lib/display";
+import { getJson, postJson } from "../lib/api";
 
 type Skill = { name: string };
 
@@ -28,6 +30,15 @@ type JobCard = {
 
 type SortMode = "default" | "score";
 
+type SearchInput = {
+  companyText: string;
+  roleText: string;
+  skillNames: string[];
+  experienceYears: number | null;
+  projectTexts: string[];
+  sort: SortMode;
+};
+
 const EXP_OPTIONS: { label: string; value: string }[] = [
   { label: "Any", value: "" },
   { label: "0–2 yrs", value: "1" },
@@ -46,7 +57,6 @@ function initials(name: string): string {
 export default function HomePage() {
   const router = useRouter();
   const [profile, setProfile] = useState<OnboardingProfile | null>(null);
-  const [skills, setSkills] = useState<Skill[]>([]);
   const [skillNames, setSkillNames] = useState<string[]>([]);
   const [skillSearch, setSkillSearch] = useState("");
   const [roleText, setRoleText] = useState<string>("");
@@ -55,17 +65,39 @@ export default function HomePage() {
   const [projectTexts, setProjectTexts] = useState<string[]>([]);
   const [sort, setSort] = useState<SortMode>("default");
   const [cards, setCards] = useState<JobCard[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
 
-  useEffect(() => {
-    fetch("/api/options")
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((data) => setSkills(data.skills ?? []))
-      .catch(() =>
-        setError("Connect the database and import jobs to load options."),
+  const optionsQuery = useQuery({
+    queryKey: ["options"],
+    queryFn: () => getJson<{ skills: Skill[] }>("/api/options"),
+  });
+  const skills = optionsQuery.data?.skills ?? [];
+
+  const searchMutation = useMutation({
+    mutationFn: (input: SearchInput) =>
+      postJson<{ cards: JobCard[] }>("/api/search", input),
+    onSuccess: (data, input) => {
+      const newCards: JobCard[] = data.cards ?? [];
+      setCards(newCards);
+      sessionStorage.setItem("rounds:cards", JSON.stringify(newCards));
+      sessionStorage.setItem(
+        "rounds:filters",
+        JSON.stringify({
+          roleText: input.roleText,
+          companyText: input.companyText,
+          skillNames: input.skillNames,
+          experienceYears:
+            input.experienceYears == null ? "" : String(input.experienceYears),
+        }),
       );
-  }, []);
+    },
+  });
+
+  const loading = searchMutation.isPending;
+  const error = searchMutation.isError
+    ? "Could not run search. Check the database connection."
+    : optionsQuery.isError
+      ? "Connect the database and import jobs to load options."
+      : "";
 
   useEffect(() => {
     const raw = sessionStorage.getItem("rounds:profile");
@@ -103,7 +135,7 @@ export default function HomePage() {
         setSkillNames(skills);
         setProjectTexts(autoProjectTexts);
         setSort(autoSort);
-        runSearch({
+        searchMutation.mutate({
           companyText: "",
           roleText: input.roleText ?? "",
           skillNames: skills,
@@ -165,45 +197,8 @@ export default function HomePage() {
     setSkillSearch("");
   }
 
-  async function runSearch(input: {
-    companyText: string;
-    roleText: string;
-    skillNames: string[];
-    experienceYears: number | null;
-    projectTexts: string[];
-    sort: SortMode;
-  }) {
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch("/api/search", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(input),
-      });
-      const data = await res.json();
-      const newCards: JobCard[] = data.cards ?? [];
-      setCards(newCards);
-      sessionStorage.setItem("rounds:cards", JSON.stringify(newCards));
-      sessionStorage.setItem(
-        "rounds:filters",
-        JSON.stringify({
-          roleText: input.roleText,
-          companyText: input.companyText,
-          skillNames: input.skillNames,
-          experienceYears:
-            input.experienceYears == null ? "" : String(input.experienceYears),
-        }),
-      );
-    } catch {
-      setError("Could not run search. Check the database connection.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   function updateResults() {
-    runSearch({
+    searchMutation.mutate({
       companyText,
       roleText,
       skillNames,
@@ -217,7 +212,7 @@ export default function HomePage() {
   function changeSort(next: SortMode) {
     if (next === sort) return;
     setSort(next);
-    runSearch({
+    searchMutation.mutate({
       companyText,
       roleText,
       skillNames,
