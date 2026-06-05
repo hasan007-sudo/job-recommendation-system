@@ -45,9 +45,9 @@ model Job {
   salaryInrMinPerYear Int?
   salaryInrMaxPerYear Int?
 
-  // 384-dim vector from Xenova/all-MiniLM-L6-v2 over a composite of title+roleType+summary+skills.
+  // 512-dim vector from Bedrock Titan Text Embeddings V2 over a composite of title+roleType+summary+skills.
   // Queried via $queryRaw; HNSW index lives in prisma/db-init.sql.
-  embedding Unsupported("vector(384)")?
+  embedding Unsupported("vector(512)")?
 
   sourceRowHash   String    @unique
   loadedAt        DateTime?

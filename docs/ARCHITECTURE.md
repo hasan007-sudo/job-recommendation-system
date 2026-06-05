@@ -20,20 +20,21 @@ Companion to [`docs/search.md`](./search.md), which covers the end-to-end flow.
 no per-field vectors):
 
 ```prisma
-// prisma/schema.prisma — 384-dim vector from Xenova/all-MiniLM-L6-v2
+// prisma/schema.prisma — 512-dim vector from Bedrock Titan Text Embeddings V2
 // over a composite of title + roleType + summary + skills.
-embedding  Unsupported("vector(384)")?
+embedding  Unsupported("vector(512)")?
 ```
 
-- pgvector `vector(384)` column, nullable.
+- pgvector `vector(512)` column, nullable.
 - Computed **once at import time** ([`prisma/import-jobs.ts`](../prisma/import-jobs.ts))
   over one concatenated string:
   ```
   "${jobTitle}. ${roleType}. ${roleSummary}. Skills: ${requiredSkills}"
   ```
   The whole posting is squashed into **one** vector — title and skills baked together.
-- Model: `Xenova/all-MiniLM-L6-v2` — 384-dim, mean-pooled, L2-normalized,
-  runs in-process via WASM ([`lib/embeddings.ts`](../lib/embeddings.ts)).
+- Model: `amazon.titan-embed-text-v2:0` — 512-dim, normalized, generated via the
+  Bedrock API ([`lib/embeddings.ts`](../lib/embeddings.ts)). Bedrock only generates
+  the vector; storage stays in Postgres.
 - Indexed by `job_embedding_hnsw` (HNSW, `vector_cosine_ops`) for fast ANN lookup.
 - `Company` has **no** embedding.
 
@@ -66,8 +67,8 @@ floor** — it always returns the 20 nearest.
    exact → trigram. There's no company vector to fall back on — remove trigram and
    company search breaks entirely.
 
-2. **Embeddings are bad at exactly what trigram is good at.** MiniLM is trained
-   for *semantic* similarity, not lexical matching:
+2. **Embeddings are bad at exactly what trigram is good at.** The embedding model
+   is trained for *semantic* similarity, not lexical matching:
 
    | Query | Trigram | Embedding |
    |---|---|---|
@@ -241,8 +242,8 @@ projectsPct ┴─ mean ─► blended score ─────┘
 | File | What it does |
 |---|---|
 | [`lib/search.ts`](../lib/search.ts) | Title + company matchers, union ranking SQL, blend + sort |
-| [`lib/embeddings.ts`](../lib/embeddings.ts) | MiniLM pipeline + LRU cache + `toPgVectorLiteral` |
-| [`prisma/schema.prisma`](../prisma/schema.prisma) | `Job.embedding vector(384)` column |
+| [`lib/embeddings.ts`](../lib/embeddings.ts) | Bedrock Titan v2 embeddings + LRU cache + `toPgVectorLiteral` |
+| [`prisma/schema.prisma`](../prisma/schema.prisma) | `Job.embedding vector(512)` column |
 | [`prisma/import-jobs.ts`](../prisma/import-jobs.ts) | Composite job embeddings at import time |
 | [`docs/search.md`](./search.md) | End-to-end search flow |
 </content>

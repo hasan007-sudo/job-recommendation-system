@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { embed, toPgVectorLiteral } from "../lib/embeddings";
+import { roundDbAdapter } from "../lib/pgAdapter";
 
 type JobRow = {
   company_name: string | null;
@@ -26,7 +27,7 @@ type JobRow = {
 const targetUrl = process.env.ROUND_DB_URL;
 if (!targetUrl) throw new Error("ROUND_DB_URL is required");
 
-const target = new PrismaClient({ adapter: new PrismaPg({ connectionString: targetUrl }) });
+const target = new PrismaClient({ adapter: roundDbAdapter() });
 
 function norm(value: string | null): string {
   return (value ?? "").trim().toLowerCase();

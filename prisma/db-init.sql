@@ -14,7 +14,7 @@ CREATE INDEX IF NOT EXISTS job_skills_trgm
 CREATE INDEX IF NOT EXISTS company_name_trgm
   ON "Company" USING GIN (name gin_trgm_ops);
 
--- Semantic title match: HNSW cosine ANN over the 384-dim composite embedding.
+-- Semantic title match: HNSW cosine ANN over the 512-dim composite embedding.
 CREATE INDEX IF NOT EXISTS job_embedding_hnsw
   ON "Job" USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 

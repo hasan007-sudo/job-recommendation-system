@@ -11,7 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1061.0",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@tailwindcss/postcss": "^4.3.0",

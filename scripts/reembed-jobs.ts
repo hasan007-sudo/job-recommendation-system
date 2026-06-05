@@ -1,0 +1,64 @@
+import "dotenv/config";
+import { PrismaClient } from "@prisma/client";
+import { embed, toPgVectorLiteral } from "../lib/embeddings";
+import { roundDbAdapter } from "../lib/pgAdapter";
+
+// One-time re-embed after switching the embedding model (MiniLM 384 -> Titan 512).
+// Reads jobs from the target DB and rebuilds the composite text from stored
+// columns (no dependency on SOURCE_DATABASE_URL). Run after migrate-embedding-512.sql.
+//   bun run tsx scripts/reembed-jobs.ts
+
+const prisma = new PrismaClient({ adapter: roundDbAdapter() });
+
+// Mirror embeddingText() in prisma/import-jobs.ts, using the stored columns.
+function embeddingText(j: {
+  jobTitle: string;
+  roleType: string | null;
+  roleSummary: string | null;
+  requiredSkills: string | null;
+}): string {
+  return `${j.jobTitle}. ${j.roleType ?? ""}. ${j.roleSummary ?? ""}. Skills: ${j.requiredSkills ?? ""}`;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Retry on Bedrock throttling with exponential backoff.
+async function embedWithRetry(text: string, attempt = 0): Promise<number[]> {
+  try {
+    return await embed(text);
+  } catch (err: unknown) {
+    const name = (err as { name?: string })?.name;
+    if (name === "ThrottlingException" && attempt < 5) {
+      await sleep(500 * 2 ** attempt);
+      return embedWithRetry(text, attempt + 1);
+    }
+    throw err;
+  }
+}
+
+async function main() {
+  const jobs = await prisma.job.findMany({
+    select: { id: true, jobTitle: true, roleType: true, roleSummary: true, requiredSkills: true },
+  });
+  console.log(`Re-embedding ${jobs.length} jobs...`);
+
+  let done = 0;
+  for (const job of jobs) {
+    const vec = await embedWithRetry(embeddingText(job));
+    await prisma.$executeRawUnsafe(
+      `UPDATE "Job" SET embedding = $1::vector WHERE id = $2`,
+      toPgVectorLiteral(vec),
+      job.id
+    );
+    if (++done % 100 === 0) console.log(`  embedded ${done}/${jobs.length}`);
+  }
+
+  await prisma.$disconnect();
+  console.log(`Done. Re-embedded ${done} jobs.`);
+}
+
+main().catch(async (error) => {
+  console.error(error);
+  await prisma.$disconnect();
+  process.exit(1);
+});
