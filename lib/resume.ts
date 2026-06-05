@@ -50,14 +50,18 @@ Return ONLY a single JSON object, no prose, matching exactly this shape:
       "graduation_year": number | null, "cgpa": string | null, "is_current": boolean }
   ],
   "skills": string[],            // every technical skill, tool, framework, and language listed
-  "projects": [ { "name": string, "description": string | null } ],
-  "work_experience": [ { "company": string, "role": string } ],
+  "projects": [ { "name": string, "description": string | null, "keywords": string[] } ],  // side, personal, academic, or open-source projects only; keywords = 3-8 domain skills / tech concepts
+  "work_experience": [ { "company": string, "role": string } ],       // paid employment at a real company only
   "experience_years": number,    // total full-time work experience in years (0 for students/new grads; internships count as ~0)
   "strongest_domain": string | null  // e.g. "Web Development", "Data Science", "QA Automation"
 }
 Rules:
 - Use [] for missing lists and null for missing scalars; never invent data.
 - "skills" must be a flat, de-duplicated list of concrete skill names.
+- "work_experience" is ONLY actual job-related work: paid employment (full-time, part-time, contract) or internships at a real company or organization. Each entry must be a role the candidate was employed for. Internships count here.
+- "projects" is ONLY side-projects, personal projects, academic/course projects, hackathon work, and open-source contributions. These are NOT employment.
+- Never put a project in "work_experience" and never put a job in "projects". If something has no employing company (e.g. a personal app, a GitHub repo, a college project), it is a project, not work experience.
+- "project keywords" must be domain skills or tech concepts only (e.g. "real-time systems", "WebSocket", "distributed caching"). Exclude soft skills, team size, awards, and process words.
 - "cgpa" is ONLY a numeric grade. Accept formats like "8.44", "3.7", "9.2/10", "72%", or grade classes like "First Class". Reject and set to null anything that describes how the degree was taken or its honours level — for example "Dist." / "Distance" / "Distance Education", "Regular", "Part-time" / "Full-time", "Online" / "Correspondence", "Hons." / "Honours". If the resume shows e.g. "B.E. (Dist.)" with no numeric grade, set cgpa to null and leave the "(Dist.)" out of every field (it is not a score, not a major, not a degree suffix worth keeping).
 - Return only the JSON object.`;
 
@@ -76,7 +80,7 @@ const ParsedResume = z.object({
     )
     .default([]),
   skills: z.array(z.string()).default([]),
-  projects: z.array(z.object({ name: z.string().nullish(), description: z.string().nullish() })).default([]),
+  projects: z.array(z.object({ name: z.string().nullish(), description: z.string().nullish(), keywords: z.array(z.string()).default([]) })).default([]),
   work_experience: z.array(z.object({ company: z.string().nullish(), role: z.string().nullish() })).default([]),
   experience_years: z.number().nullish(),
   strongest_domain: z.string().nullish(),
@@ -150,7 +154,8 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
     },
     skills: dedupe(parsed.skills.map((s) => s.trim()).filter(Boolean)),
     projects,
-    experience: [...projects, ...work],
+    projectKeywords: parsed.projects.map((p) => p.keywords ?? []),
+    experience: work,
     scores: { cgpa: edu?.cgpa != null ? String(edu.cgpa) : "", twelfth: "", tenth: "" },
     roleHint: parsed.strongest_domain ?? parsed.work_experience[0]?.role ?? "",
     experienceYears: Math.max(0, Math.round(parsed.experience_years ?? 0)),

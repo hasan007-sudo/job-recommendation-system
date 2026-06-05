@@ -1,14 +1,17 @@
 import "dotenv/config";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { embed, toPgVectorLiteral } from "../lib/embeddings";
-import { roundDbAdapter } from "../lib/pgAdapter";
 
 // One-time re-embed after switching the embedding model (MiniLM 384 -> Titan 512).
 // Reads jobs from the target DB and rebuilds the composite text from stored
 // columns (no dependency on SOURCE_DATABASE_URL). Run after migrate-embedding-512.sql.
 //   bun run tsx scripts/reembed-jobs.ts
 
-const prisma = new PrismaClient({ adapter: roundDbAdapter() });
+const connectionString = process.env.ROUND_DB_URL;
+if (!connectionString) throw new Error("ROUND_DB_URL is required");
+
+const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
 
 // Mirror embeddingText() in prisma/import-jobs.ts, using the stored columns.
 function embeddingText(j: {

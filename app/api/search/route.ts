@@ -7,7 +7,7 @@ const schema = z.object({
   roleText: z.string().default(""),
   skillNames: z.array(z.string()).default([]),
   experienceYears: z.number().int().min(0).max(60).nullable().default(null),
-  projectText: z.string().default(""),
+  projectTexts: z.array(z.string()).default([]),
   sort: z.enum(["default", "score"]).default("default"),
 });
 

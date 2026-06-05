@@ -1,11 +1,10 @@
 // Job-centric search. Title (exact + trigram + semantic) and company act as a
 // precedence tier, experience stays a hard filter, and the candidate set is the
-// UNION of role-matched ∪ company-matched ∪ skill-matched ∪ project-matched jobs.
+// UNION of role-matched ∪ company-matched ∪ skill-matched jobs.
 // The match % is an equal blend of two sub-scores, computed in SQL so the LIMIT
 // is a correct top-N by match %:
 //   • skills%   — job's required-skill tokens covered by the user's skills (ILIKE).
-//   • projects% — job's required-skill tokens found in the user's project text,
-//                 falling back to project↔job embedding cosine when none overlap.
+//   • projects% — project↔job embedding cosine similarity (rescaled to [0–100]).
 // "default" (Best match): role/company tier first, each tier guaranteed up to
 // TIER_FLOOR slots, then backfilled toward RESULT_LIMIT by score. "score" (Match
 // score): pure top-N by blended score, tier ignored.
@@ -25,6 +24,13 @@ const RESULT_LIMIT = 30;
 // "Best match" guarantees each tier (role/company vs skill/project) at least this
 // many slots before the other backfills toward RESULT_LIMIT.
 const TIER_FLOOR = 15;
+// Cosine similarity floor for project↔job matching. Titan embeddings have a
+// background similarity of ~0.10–0.20 even for unrelated texts; anything below
+// this is noise. Raise to tighten relevance, lower to widen it.
+const PROJ_SIM_FLOOR = 0.4;
+// Upper end of the similarity band mapped to 100%. Similarities above this are
+// treated as a perfect project match.
+const PROJ_SIM_CEIL = 0.7;
 
 function normalize(text: string): string {
   return text
@@ -52,30 +58,36 @@ async function matchTitleIds(text: string): Promise<string[]> {
   const add = (rows: { id: string }[]) => rows.forEach((r) => ids.add(r.id));
 
   // Tier 1 — exact: case-folded title equality.
-  add(await prisma.$queryRaw<{ id: string }[]>`
+  add(
+    await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "Job"
     WHERE lower("jobTitle") = ${norm}
     LIMIT ${TITLE_CANDIDATES}
-  `);
+  `,
+  );
 
   // Tier 2 — trigram: pg_trgm fuzzy match (catches typos/partials). `%` uses the
   // GIN index; keep only rows above the similarity floor, most similar first.
-  add(await prisma.$queryRaw<{ id: string }[]>`
+  add(
+    await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "Job"
     WHERE "jobTitle" % ${text} AND similarity("jobTitle", ${text}) >= ${TITLE_TRIGRAM_MIN}
     ORDER BY similarity("jobTitle", ${text}) DESC
     LIMIT ${TITLE_CANDIDATES}
-  `);
+  `,
+  );
 
   // Tier 3 — vector: semantic ANN (catches synonyms like "SDE" ↔ "Software
   // Engineer"). `<=>` is cosine distance over the HNSW index; nearest first.
   const vecLit = toPgVectorLiteral(await embed(text));
-  add(await prisma.$queryRaw<{ id: string }[]>`
+  add(
+    await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "Job"
     WHERE embedding IS NOT NULL
     ORDER BY embedding <=> ${vecLit}::vector
     LIMIT ${TITLE_CANDIDATES}
-  `);
+  `,
+  );
 
   return [...ids];
 }
@@ -112,8 +124,9 @@ export type SearchInput = {
   roleText: string;
   skillNames: string[];
   experienceYears: number | null;
-  // Concatenated resume project text, scored against each job's required skills.
-  projectText?: string;
+  // Per-project keyword strings (LLM-extracted). Each entry is one project's
+  // domain skills joined as a phrase. projectsPct = MAX cosine across entries.
+  projectTexts?: string[];
   // "default" tiers role/company matches first; "score" ranks purely by blend.
   sort?: SortMode;
 };
@@ -135,10 +148,10 @@ type SearchRow = {
 
 export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
   const sort = input.sort ?? "default";
-  const projectText = (input.projectText ?? "").trim();
-  // Normalize to the same [a-z0-9] form the SQL applies to each job skill token,
-  // so substring matching of a token inside the project blob is apples-to-apples.
-  const projTextNorm = projectText.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const projectTexts = (input.projectTexts ?? [])
+    .map((t) => t.trim())
+    .filter(Boolean);
+  console.log({ projectTexts });
 
   const [titleIds, companyIds] = await Promise.all([
     input.roleText
@@ -164,26 +177,28 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
 
   const hasSkills = skills.length > 0;
 
-  // Embed the project text once for the semantic fallback. With no project text
-  // we pass a throwaway literal that only needs to parse — the CASE guard
-  // (hasProjVec) keeps projSim null and the `<=>` is never evaluated.
-  const hasProjVec = projectText.length > 0;
-  const projVecLit = hasProjVec ? toPgVectorLiteral(await embed(projectText)) : "[0]";
+  // Embed each project's keyword string separately. projSim in SQL will be the
+  // MAX cosine across all project vectors — job scored against its best match.
+  const hasProjVecs = projectTexts.length > 0;
+  const projVecLits: string[] = hasProjVecs
+    ? await Promise.all(
+        projectTexts.map((t) => embed(t).then(toPgVectorLiteral)),
+      )
+    : [];
 
-  // Candidate set = role-matched ∪ company-matched ∪ skill-matched ∪
-  // project-keyword-matched (experience stays a hard filter). Sub-scores, the
-  // blend, the per-tier floor, and the final order/limit are all computed here so
-  // a 30-row LIMIT is a correct top-N by match %.
+  // Candidate set = role-matched ∪ company-matched ∪ skill-matched (experience
+  // stays a hard filter). Sub-scores, the blend, the per-tier floor, and the
+  // final order/limit are all computed here so a 30-row LIMIT is correct top-N.
   //   raw    → counts + raw cosine + tier flag
-  //   sub    → skills% / projects% (keyword, else rescaled cosine)
+  //   sub    → skills% / projects% (cosine rescaled to [0–100])
   //   scored → blended score = mean of the non-null sub-scores
   //   ranked → row number within each tier (for the Best-match floor)
   //   pick   → select RESULT_LIMIT rows (default: floor-15/tier then backfill by
   //            score; score: pure top-N), then display role-tier-first for default.
   const rows = await prisma.$queryRaw<SearchRow[]>`
-    -- 1) raw — the UNION candidate set: every job matching role, company, skills,
-    --    or project keywords (and passing the experience hard filter), carrying
-    --    raw counts (matched / projMatched / required), raw cosine, and tier flag.
+    -- 1) raw — the UNION candidate set: every job matching role, company, or skills
+    --    (and passing the experience hard filter), carrying raw counts (matched /
+    --    required), raw cosine similarity, and tier flag.
     WITH raw AS (
       SELECT
         j.id AS "jobId",
@@ -195,9 +210,11 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
         j."createdAt",
         CASE WHEN ${hasSkills} THEN cov.matched ELSE NULL END AS matched,
         cov.required AS required,
-        cov."projMatched" AS "projMatched",
-        CASE WHEN ${hasProjVec} AND j.embedding IS NOT NULL
-             THEN (1 - (j.embedding <=> ${projVecLit}::vector))::float
+        CASE WHEN ${hasProjVecs} AND j.embedding IS NOT NULL
+             THEN (
+               SELECT MAX((1 - (j.embedding <=> pv::vector))::float)
+               FROM unnest(${projVecLits}::text[]) AS pv
+             )
              ELSE NULL END AS "projSim",
         (
           (cardinality(${titleIds}::text[]) > 0 AND j.id = ANY(${titleIds}::text[]))
@@ -213,10 +230,6 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
             SELECT 1 FROM unnest(${normalizedSkills}::text[]) nsk
             WHERE ntok LIKE '%' || nsk || '%'
           ))::int AS matched,
-          COUNT(*) FILTER (WHERE
-            length(${projTextNorm}) > 0
-            AND position(ntok in ${projTextNorm}) > 0
-          )::int AS "projMatched",
           COUNT(*)::int AS required
         FROM (
           SELECT regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g') AS ntok
@@ -233,28 +246,19 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
           (cardinality(${titleIds}::text[]) > 0 AND j.id = ANY(${titleIds}::text[]))
           OR (cardinality(${companyIds}::text[]) > 0 AND j."companyId" = ANY(${companyIds}::text[]))
           OR cov.matched > 0
-          OR cov."projMatched" > 0
         )
     ),
     -- 2) sub — per-job sub-scores derived from raw counts (both in [0,100]):
     --      skillsPct   = % of the job's required skills you list
-    --      projectsPct = % of them your projects show (keyword overlap), or — when
-    --                    none overlap — the project↔job cosine rescaled to [0,100]
+    --      projectsPct = project↔job embedding cosine rescaled to [0,100]
     sub AS (
       SELECT raw.*,
         CASE WHEN ${hasSkills} AND required > 0
              THEN round(matched::numeric / required * 100)::int END AS "skillsPct",
-        CASE WHEN ${hasProjVec} THEN
-          CASE
-            -- primary: keyword overlap of job skills in the project text
-            WHEN "projMatched" > 0 AND required > 0
-              THEN round("projMatched"::numeric / required * 100)::int
-            -- fallback: rescale the cosine band (~0.15–0.7) onto 0–100
-            WHEN "projSim" IS NOT NULL
-              THEN round((greatest(0, least(1, ("projSim" - 0.15) / 0.55)) * 100)::numeric)::int
-            ELSE NULL
-          END
-        ELSE NULL END AS "projectsPct"
+        CASE WHEN ${hasProjVecs} AND "projSim" IS NOT NULL
+             THEN round((greatest(0, least(1, ("projSim" - ${PROJ_SIM_FLOOR}) / ${PROJ_SIM_CEIL - PROJ_SIM_FLOOR})) * 100)::numeric)::int
+             ELSE NULL
+        END AS "projectsPct"
       FROM raw
     ),
     -- 3) scored — the blended match %: equal mean of whichever sub-scores exist

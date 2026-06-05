@@ -13,6 +13,8 @@ export type OnboardingProfile = {
   // Raw project entries ("name · description"), kept separate from the merged
   // `experience` list so the project-match criterion can score against them.
   projects: string[];
+  // LLM-extracted domain skills/tech concepts per project, used for semantic matching.
+  projectKeywords: string[][];
   experience: string[];
   scores: { cgpa: string; twelfth: string; tenth: string };
   roleHint: string;
@@ -27,6 +29,7 @@ export const EMPTY_PROFILE: OnboardingProfile = {
   education: { degree: "", major: "", institution: "", years: "", standing: "" },
   skills: [],
   projects: [],
+  projectKeywords: [],
   experience: [],
   scores: { cgpa: "", twelfth: "", tenth: "" },
   roleHint: "",
@@ -36,12 +39,21 @@ export const EMPTY_PROFILE: OnboardingProfile = {
 
 // Build the input for the existing job search from an (edited) profile.
 export function deriveSearchInput(profile: OnboardingProfile): SearchInput {
+  // Use LLM-extracted per-project keyword strings when available; fall back to
+  // raw project prose for sessions parsed before this field existed.
+  const projectTexts =
+    profile.projectKeywords && profile.projectKeywords.length > 0
+      ? profile.projectKeywords.map((kws) => kws.join(", ")).filter(Boolean)
+      : profile.projects.length > 0
+        ? [profile.projects.join(". ")]
+        : [];
+
   return {
     companyText: "",
     roleText: profile.roleHint,
     skillNames: profile.skills,
     experienceYears: profile.experienceYears,
-    projectText: profile.projects.join(". "),
+    projectTexts,
     sort: "default",
   };
 }

@@ -386,6 +386,19 @@ function ProfileStep({
               onChange={(experience) =>
                 setProfile((p) => ({ ...p, experience }))
               }
+              placeholder="Role at company…"
+            />
+          </Card>
+        </div>
+
+        <div className="lg:col-span-2">
+          <Card title="Projects" hint={`${profile.projects.length} projects`}>
+            <ExperienceEditor
+              items={profile.projects}
+              onChange={(projects) =>
+                setProfile((p) => ({ ...p, projects }))
+              }
+              placeholder="Side, academic, or open-source project…"
             />
           </Card>
         </div>
@@ -522,9 +535,11 @@ function SkillsEditor({
 function ExperienceEditor({
   items,
   onChange,
+  placeholder,
 }: {
   items: string[];
   onChange: (items: string[]) => void;
+  placeholder?: string;
 }) {
   return (
     <div className="divide-y divide-slate-200">
@@ -535,7 +550,7 @@ function ExperienceEditor({
           </span>
           <input
             value={item}
-            placeholder="Project, internship, role…"
+            placeholder={placeholder}
             onChange={(e) =>
               onChange(items.map((v, j) => (j === i ? e.target.value : v)))
             }

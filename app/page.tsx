@@ -52,7 +52,7 @@ export default function HomePage() {
   const [roleText, setRoleText] = useState<string>("");
   const [companyText, setCompanyText] = useState<string>("");
   const [experienceYears, setExperienceYears] = useState<string>("");
-  const [projectText, setProjectText] = useState<string>("");
+  const [projectTexts, setProjectTexts] = useState<string[]>([]);
   const [sort, setSort] = useState<SortMode>("default");
   const [cards, setCards] = useState<JobCard[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -78,7 +78,10 @@ export default function HomePage() {
         if (p.roleHint) setRoleText(p.roleHint);
         if (p.experienceYears != null)
           setExperienceYears(String(p.experienceYears));
-        if (p.projects?.length) setProjectText(p.projects.join(". "));
+        if (p.projectKeywords?.length)
+          setProjectTexts(p.projectKeywords.map((kws) => kws.join(", ")).filter(Boolean));
+        else if (p.projects?.length)
+          setProjectTexts([p.projects.join(". ")]);
       } catch {
         // ignore
       }
@@ -90,18 +93,21 @@ export default function HomePage() {
       try {
         const input = JSON.parse(auto);
         const skills = Array.isArray(input.skillNames) ? input.skillNames : [];
-        const autoProjectText =
-          typeof input.projectText === "string" ? input.projectText : "";
+        const autoProjectTexts: string[] = Array.isArray(input.projectTexts)
+          ? input.projectTexts
+          : typeof input.projectText === "string" && input.projectText
+            ? [input.projectText]
+            : [];
         const autoSort: SortMode = input.sort === "score" ? "score" : "default";
         setSkillNames(skills);
-        setProjectText(autoProjectText);
+        setProjectTexts(autoProjectTexts);
         setSort(autoSort);
         runSearch({
           companyText: "",
           roleText: input.roleText ?? "",
           skillNames: skills,
           experienceYears: input.experienceYears ?? null,
-          projectText: autoProjectText,
+          projectTexts: autoProjectTexts,
           sort: autoSort,
         });
         return;
@@ -163,7 +169,7 @@ export default function HomePage() {
     roleText: string;
     skillNames: string[];
     experienceYears: number | null;
-    projectText: string;
+    projectTexts: string[];
     sort: SortMode;
   }) {
     setLoading(true);
@@ -201,7 +207,7 @@ export default function HomePage() {
       roleText,
       skillNames,
       experienceYears: experienceYears === "" ? null : Number(experienceYears),
-      projectText,
+      projectTexts,
       sort,
     });
   }
@@ -215,7 +221,7 @@ export default function HomePage() {
       roleText,
       skillNames,
       experienceYears: experienceYears === "" ? null : Number(experienceYears),
-      projectText,
+      projectTexts,
       sort: next,
     });
   }
@@ -346,8 +352,10 @@ export default function HomePage() {
 
               <Field label="Projects">
                 <textarea
-                  value={projectText}
-                  onChange={(e) => setProjectText(e.target.value)}
+                  value={projectTexts.join(", ")}
+                  onChange={(e) =>
+                    setProjectTexts(e.target.value ? [e.target.value] : [])
+                  }
                   placeholder="Describe your projects — what you built and the tech used"
                   rows={4}
                   className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-[14px] leading-[1.5] outline-none placeholder:text-slate-400 focus:border-indigo-500"
@@ -380,8 +388,8 @@ export default function HomePage() {
                 <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-0.5">
                   {(
                     [
-                      ["default", "Best match"],
-                      ["score", "Match score"],
+                      ["default", "Filter match (Company/Role preference)"],
+                      ["score", "Match score (With skills)"],
                     ] as [SortMode, string][]
                   ).map(([value, label]) => (
                     <button
@@ -598,7 +606,13 @@ function JobRow({ card, onClick }: { card: JobCard; onClick: () => void }) {
   );
 }
 
-function BreakdownRow({ label, value }: { label: string; value: number | null }) {
+function BreakdownRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | null;
+}) {
   return (
     <div className="flex items-center justify-between py-1">
       <span className="text-[12px] text-slate-500">{label}</span>

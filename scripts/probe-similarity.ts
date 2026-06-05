@@ -1,10 +1,12 @@
 import "dotenv/config";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { embed, toPgVectorLiteral } from "../lib/embeddings";
-import { roundDbAdapter } from "../lib/pgAdapter";
 
 async function main() {
-  const prisma = new PrismaClient({ adapter: roundDbAdapter() });
+  const prisma = new PrismaClient({
+    adapter: new PrismaPg({ connectionString: process.env.ROUND_DB_URL! }),
+  });
 
   const queries = ["SDE", "Product designer", "web dev", "ML", "swe", "backend", "frontend dev"];
 
