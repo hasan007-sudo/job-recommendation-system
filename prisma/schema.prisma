@@ -26,18 +26,33 @@ model Job {
   jobTitle            String
   site                String?
   location            String?
+  roleCategory        String?
   roleType            String?
+  workMode            String?
   requiredSkills      String?
+  otherSkillsNotes    String?
+  educationRequirement String?
   roleSummary         String?
   keyResponsibilities String?
 
-  // '+'-separated round pattern, e.g. "Opening/Screening + Technical/Role Skills + Final/Culture Fit".
+  // Original posting URL and the complete scraped job description text.
+  sourceUrl          String?
+  fullJobDescription String?
+
+  // Fixed 4-round interview structure. Each holds ';'-separated key competencies/topics
+  // for that round, precomputed in the source JobPostingsV2 table.
+  roundScreening   String?
+  roundBehavioural String?
+  roundTechnical   String?
+  roundCultureFit  String?
+
+  // '+'-separated round pattern, kept so the listing/search layer keeps working;
+  // the importer now populates it with the fixed "Screening + Behavioural + Technical + Culture fit".
   focusRoundPattern String
   // ';'-separated "Name - description" detail, kept for round descriptions.
   focusRounds       String?
 
-  // Cached LLM-derived core competencies for this JD. JSON string:
-  // { "groups": [{ "name": string, "items": [{ "title": string, "description": string }] }] }
+  // Legacy cached LLM-derived competencies JSON (no longer populated; rounds carry competencies now).
   competencies      String?
 
   experienceMinYears  Int?

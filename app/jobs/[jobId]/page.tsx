@@ -3,13 +3,10 @@
 import { use, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Loader2 } from "lucide-react";
-import type { ParsedRound } from "../../../lib/rounds";
+import { ArrowLeft, ExternalLink, Loader2 } from "lucide-react";
+import type { Round } from "../../../lib/rounds";
 import { formatExperience, matchPill, initials } from "../../../lib/display";
 import { getJson } from "../../../lib/api";
-
-type Item = { title: string; description: string };
-type Group = { name: string; items: Item[] };
 
 type JobDetail = {
   job: {
@@ -19,35 +16,23 @@ type JobDetail = {
     seniority: string;
     experienceMinYears: number | null;
     experienceMaxYears: number | null;
-    rounds: ParsedRound[];
+    location: string | null;
+    workMode: string | null;
+    educationRequirement: string | null;
+    requiredSkills: string | null;
     roleSummary: string | null;
+    sourceUrl: string | null;
+    fullJobDescription: string | null;
+    rounds: Round[];
   };
-  competencies: { groups: Group[] };
 };
 
 const ROUND_MINUTES: Record<string, number> = {
-  opening: 30,
+  screening: 30,
+  behavioural: 45,
   technical: 60,
-  system_design: 75,
-  behavioral: 45,
-  domain: 45,
-  final: 45,
-  other: 45,
+  culture_fit: 45,
 };
-
-function groupTone(name: string): { label: string; color: string } {
-  const n = name.toLowerCase();
-  if (n.includes("behavior") || n.includes("soft")) {
-    return { label: "BEHAVIORAL / SOFT", color: "text-emerald-500" };
-  }
-  if (n.includes("problem") || n.includes("delivery")) {
-    return { label: "PROBLEM-SOLVING & DELIVERY", color: "text-amber-500" };
-  }
-  if (n.includes("technical")) {
-    return { label: "TECHNICAL", color: "text-indigo-500" };
-  }
-  return { label: name.toUpperCase(), color: "text-indigo-500" };
-}
 
 export default function JobDetailPage({ params }: { params: Promise<{ jobId: string }> }) {
   const { jobId } = use(params);
@@ -100,7 +85,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
 
         {!error && !detail && (
           <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-8 text-slate-500">
-            <Loader2 size={18} className="animate-spin" /> Analyzing job description…
+            <Loader2 size={18} className="animate-spin" /> Loading job…
           </div>
         )}
 
@@ -117,9 +102,9 @@ function JobDetailView({
   detail: JobDetail;
   matchPercent: number | undefined;
 }) {
-  const { job, competencies } = detail;
+  const { job } = detail;
   const experience = formatExperience(job.experienceMinYears, job.experienceMaxYears);
-  const meta = [job.seniority, experience].filter(Boolean);
+  const meta = [job.seniority, experience, job.location, job.workMode].filter(Boolean);
   const pill = matchPill(matchPercent);
 
   return (
@@ -143,6 +128,16 @@ function JobDetailView({
                 <span className="capitalize">{meta.join(" · ")}</span>
               </p>
             )}
+            {job.sourceUrl && (
+              <a
+                href={job.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-bold uppercase tracking-[0.18em] text-indigo-600 hover:text-indigo-800"
+              >
+                View original posting <ExternalLink size={14} />
+              </a>
+            )}
           </div>
           {pill && (
             <div className="shrink-0 text-right">
@@ -165,19 +160,25 @@ function JobDetailView({
         )}
       </section>
 
-      <div className="grid grid-cols-1 border-t border-slate-200 lg:grid-cols-2">
-        <div className="border-b border-slate-200 bg-slate-50 p-8 sm:p-10 lg:border-b-0 lg:border-r">
-          <Timeline rounds={job.rounds} />
-        </div>
-        <div className="p-8 sm:p-10">
-          <Competencies groups={competencies.groups} />
-        </div>
+      <div className="border-t border-slate-200 bg-slate-50 p-8 sm:p-10">
+        <Rounds rounds={job.rounds} />
       </div>
+
+      {job.fullJobDescription && (
+        <div className="border-t border-slate-200 p-8 sm:p-10">
+          <h2 className="mb-6 text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
+            Full job description
+          </h2>
+          <p className="max-w-3xl whitespace-pre-wrap text-[14.5px] leading-[1.7] text-slate-700">
+            {job.fullJobDescription}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
 
-function Timeline({ rounds }: { rounds: ParsedRound[] }) {
+function Rounds({ rounds }: { rounds: Round[] }) {
   return (
     <section>
       <div className="mb-6 flex items-end justify-between">
@@ -189,10 +190,7 @@ function Timeline({ rounds }: { rounds: ParsedRound[] }) {
         </span>
       </div>
       <ol className="relative space-y-7">
-        <span
-          aria-hidden
-          className="absolute left-3.5 top-3 bottom-3 w-px bg-slate-200"
-        />
+        <span aria-hidden className="absolute left-3.5 top-3 bottom-3 w-px bg-slate-200" />
         {rounds.map((r, i) => {
           const mins = ROUND_MINUTES[r.slug] ?? 45;
           const isFirst = i === 0;
@@ -208,61 +206,28 @@ function Timeline({ rounds }: { rounds: ParsedRound[] }) {
               >
                 {r.position}
               </span>
-              <div>
+              <div className="min-w-0 flex-1">
                 <p className="text-[15px] font-bold text-slate-900">{r.title}</p>
                 <p className="mt-0.5 text-[11px] font-bold uppercase tracking-[0.18em] text-indigo-500">
                   {mins} MIN
                 </p>
+                {r.competencies.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {r.competencies.map((c, ci) => (
+                      <span
+                        key={ci}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-medium text-slate-700"
+                      >
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </li>
           );
         })}
       </ol>
-    </section>
-  );
-}
-
-function Competencies({ groups }: { groups: Group[] }) {
-  return (
-    <section>
-      <h2 className="mb-6 text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
-        Core competencies
-      </h2>
-      {groups.length === 0 ? (
-        <p className="text-[13px] text-slate-500">
-          No competencies generated — the job description was too short.
-        </p>
-      ) : (
-        <div className="space-y-8">
-          {groups.map((group, gi) => {
-            const tone = groupTone(group.name);
-            return (
-              <div key={gi}>
-                <h3
-                  className={`mb-3 text-[12px] font-bold uppercase tracking-[0.18em] ${tone.color}`}
-                >
-                  {tone.label}
-                </h3>
-                <div className="space-y-3">
-                  {group.items.map((it, ii) => (
-                    <div
-                      key={ii}
-                      className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-4"
-                    >
-                      <p className="text-[15px] font-bold text-slate-900">{it.title}</p>
-                      {it.description && (
-                        <p className="mt-1 text-[13.5px] leading-[1.55] text-slate-500">
-                          {it.description}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
     </section>
   );
 }

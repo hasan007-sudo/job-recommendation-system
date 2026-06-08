@@ -24,3 +24,33 @@ export function parseRounds(pattern: string | null): ParsedRound[] {
       return { position: i + 1, slug: mapped.slug, title: mapped.title };
     });
 }
+
+// Fixed 4-round interview structure. Each round carries its own key competencies,
+// stored as ';'-separated topics on the Job (precomputed in JobPostingsV2).
+export type Round = { position: number; slug: string; title: string; competencies: string[] };
+
+const FIXED_ROUNDS = [
+  { slug: "screening", title: "Screening", key: "roundScreening" },
+  { slug: "behavioural", title: "Behavioural", key: "roundBehavioural" },
+  { slug: "technical", title: "Technical", key: "roundTechnical" },
+  { slug: "culture_fit", title: "Culture fit", key: "roundCultureFit" },
+] as const;
+
+type RoundFields = {
+  roundScreening: string | null;
+  roundBehavioural: string | null;
+  roundTechnical: string | null;
+  roundCultureFit: string | null;
+};
+
+export function buildRounds(job: RoundFields): Round[] {
+  return FIXED_ROUNDS.map((round, i) => ({
+    position: i + 1,
+    slug: round.slug,
+    title: round.title,
+    competencies: (job[round.key] ?? "")
+      .split(";")
+      .map((topic) => topic.trim())
+      .filter(Boolean),
+  }));
+}

@@ -6,22 +6,34 @@ import { embed, toPgVectorLiteral } from "../lib/embeddings";
 type JobRow = {
   company_name: string | null;
   job_title: string | null;
+  role_category: string | null;
   role_type: string | null;
   location: string | null;
+  work_mode: string | null;
   role_summary: string | null;
   key_responsibilities: string | null;
   required_skills: string | null;
-  focus_rounds: string | null;
-  focus_round_pattern: string | null;
+  other_skills_notes: string | null;
+  education_requirement: string | null;
+  round_screening: string | null;
+  round_behavioural: string | null;
+  round_technical: string | null;
+  round_culture_fit: string | null;
   salary_inr_per_year_min: number | null;
   salary_inr_per_year_max: number | null;
   experience_min_years: number | null;
   experience_max_years: number | null;
+  source_url: string | null;
+  full_job_description: string | null;
   site: string | null;
   row_hash: string | null;
   loaded_at: Date | null;
   updated_at: Date | null;
 };
+
+// Fixed 4-round structure that every imported job uses. Stored in focusRoundPattern
+// so the existing listing/search layer (parseRounds) keeps working unchanged.
+const FIXED_ROUND_PATTERN = "Screening + Behavioural + Technical + Culture fit";
 
 const targetUrl = process.env.ROUND_DB_URL;
 if (!targetUrl) throw new Error("ROUND_DB_URL is required");
@@ -32,15 +44,10 @@ function norm(value: string | null): string {
   return (value ?? "").trim().toLowerCase();
 }
 
-function segmentCount(pattern: string | null): number {
-  if (!pattern) return 0;
-  return pattern.split("+").map((s) => s.trim()).filter(Boolean).length;
-}
-
-// Winner per (company, title): richest round pattern → freshest → most skills → stable hash.
+// Winner per (company, title): richest JD → freshest → most skills → stable hash.
 function isBetter(candidate: JobRow, current: JobRow): boolean {
-  const a = segmentCount(candidate.focus_round_pattern);
-  const b = segmentCount(current.focus_round_pattern);
+  const a = candidate.full_job_description?.length ?? 0;
+  const b = current.full_job_description?.length ?? 0;
   if (a !== b) return a > b;
 
   const at = candidate.updated_at ? candidate.updated_at.getTime() : 0;
@@ -66,12 +73,14 @@ async function main() {
   const source = new PrismaClient({ adapter: new PrismaPg({ connectionString: sourceUrl }) });
 
   const rows = await source.$queryRawUnsafe<JobRow[]>(`
-    SELECT company_name, job_title, role_type, location, role_summary, key_responsibilities,
-           required_skills, focus_rounds, focus_round_pattern,
-           salary_inr_per_year_min, salary_inr_per_year_max,
-           experience_min_years, experience_max_years, site, row_hash, loaded_at, updated_at
-    FROM job_postings
-    WHERE job_title IS NOT NULL AND company_name IS NOT NULL AND focus_round_pattern IS NOT NULL
+    SELECT company_name, job_title, role_category, role_type, location, work_mode,
+           role_summary, key_responsibilities, required_skills, other_skills_notes,
+           education_requirement, round_screening, round_behavioural, round_technical,
+           round_culture_fit, salary_inr_per_year_min, salary_inr_per_year_max,
+           experience_min_years, experience_max_years, source_url, full_job_description,
+           site, row_hash, loaded_at, updated_at
+    FROM "JobPostingsV2"
+    WHERE job_title IS NOT NULL AND company_name IS NOT NULL
   `);
 
   // Dedup by (company, lower title): keep the richest row.
@@ -124,12 +133,21 @@ async function main() {
         jobTitle: row.job_title!,
         site: row.site,
         location: row.location,
+        roleCategory: row.role_category,
         roleType: row.role_type,
+        workMode: row.work_mode,
         requiredSkills: row.required_skills,
+        otherSkillsNotes: row.other_skills_notes,
+        educationRequirement: row.education_requirement,
         roleSummary: row.role_summary,
         keyResponsibilities: row.key_responsibilities,
-        focusRoundPattern: row.focus_round_pattern!,
-        focusRounds: row.focus_rounds,
+        sourceUrl: row.source_url,
+        fullJobDescription: row.full_job_description,
+        roundScreening: row.round_screening,
+        roundBehavioural: row.round_behavioural,
+        roundTechnical: row.round_technical,
+        roundCultureFit: row.round_culture_fit,
+        focusRoundPattern: FIXED_ROUND_PATTERN,
         experienceMinYears: row.experience_min_years,
         experienceMaxYears: row.experience_max_years,
         salaryInrMinPerYear: row.salary_inr_per_year_min,
