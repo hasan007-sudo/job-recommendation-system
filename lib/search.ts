@@ -1,13 +1,14 @@
-// Job-centric search. Title (exact + trigram + semantic) and company act as a
-// precedence tier, experience stays a hard filter, and the candidate set is the
-// UNION of role-matched ∪ company-matched ∪ skill-matched jobs.
-// The match % is an equal blend of two sub-scores, computed in SQL so the LIMIT
-// is a correct top-N by match %:
+// Job-centric search. Experience stays a hard filter, and the candidate set is
+// the UNION of role-matched ∪ company-matched ∪ skill-matched jobs.
+// Every candidate gets a tier: 0 = company-matched, 1 = role-matched,
+// 2 = skill-only. The match % is an equal blend of two sub-scores, computed in
+// SQL so the LIMIT is a correct top-N by match %:
 //   • skills%   — job's required-skill tokens covered by the user's skills (ILIKE).
 //   • projects% — project↔job embedding cosine similarity (rescaled to [0–100]).
-// "default" (Best match): role/company tier first, each tier guaranteed up to
-// TIER_FLOOR slots, then backfilled toward RESULT_LIMIT by score. "score" (Match
-// score): pure top-N by blended score, tier ignored.
+// "default" (Best match): company tier first (always shown, even at 0% match),
+// then role, then skill — the role/skill tiers each guaranteed up to
+// MIN_SLOTS_PER_TIER slots before backfilling toward MAX_RESULTS by score.
+// "score" (Match score): pure top-N by blended score, tier ignored.
 // Rounds are parsed at read time from focusRoundPattern.
 
 import { prisma } from "./prisma";
@@ -15,19 +16,20 @@ import { embed, toPgVectorLiteral } from "./embeddings";
 import { parseRounds } from "./rounds";
 import type { JobCard, Seniority } from "./types";
 
-const TITLE_TRIGRAM_MIN = 0.3;
-const COMPANY_TRIGRAM_MIN = 0.4;
-const TITLE_CANDIDATES = 20;
+const MIN_TITLE_TRIGRAM_SIMILARITY = 0.3;
+const MIN_COMPANY_TRIGRAM_SIMILARITY = 0.4;
+const MAX_TITLE_MATCHES_PER_TIER = 20;
 // We retrieve exactly what we display — no oversized candidate pool. The blended
 // score is computed in SQL so the LIMIT is a correct top-N by match %.
-const RESULT_LIMIT = 30;
-// "Best match" guarantees each tier (role/company vs skill/project) at least this
-// many slots before the other backfills toward RESULT_LIMIT.
-const TIER_FLOOR = 15;
+const MAX_RESULTS = 30;
+// "Best match" guarantees the role and skill tiers at least this many slots each
+// before the other backfills toward MAX_RESULTS. (Company tier is shown in full,
+// ahead of both, so this floor does not apply to it.)
+const MIN_SLOTS_PER_TIER = 15;
 // Cosine similarity floor for project↔job matching. Titan embeddings have a
 // background similarity of ~0.10–0.20 even for unrelated texts; anything below
 // this is noise. Raise to tighten relevance, lower to widen it.
-const PROJ_SIM_FLOOR = 0.4;
+const MIN_PROJECT_SIMILARITY = 0.4;
 
 function normalize(text: string): string {
   return text
@@ -46,7 +48,7 @@ export function deriveSeniority(experienceYears: number | null): Seniority {
 // Title candidates: the UNION of exact, trigram, and semantic (vector) tiers, so a
 // generic query like "Software Engineer" also surfaces related real titles. Title
 // only decides membership (it never ranks the result), so we return ids only — the
-// per-tier similarity lives in each tier's ORDER BY to pick the top TITLE_CANDIDATES.
+// per-tier similarity lives in each tier's ORDER BY to pick the top MAX_TITLE_MATCHES_PER_TIER.
 async function matchTitleIds(text: string): Promise<string[]> {
   const norm = normalize(text);
   if (!norm) return [];
@@ -59,7 +61,7 @@ async function matchTitleIds(text: string): Promise<string[]> {
     await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "Job"
     WHERE lower("jobTitle") = ${norm}
-    LIMIT ${TITLE_CANDIDATES}
+    LIMIT ${MAX_TITLE_MATCHES_PER_TIER}
   `,
   );
 
@@ -68,9 +70,9 @@ async function matchTitleIds(text: string): Promise<string[]> {
   add(
     await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "Job"
-    WHERE "jobTitle" % ${text} AND similarity("jobTitle", ${text}) >= ${TITLE_TRIGRAM_MIN}
+    WHERE "jobTitle" % ${text} AND similarity("jobTitle", ${text}) >= ${MIN_TITLE_TRIGRAM_SIMILARITY}
     ORDER BY similarity("jobTitle", ${text}) DESC
-    LIMIT ${TITLE_CANDIDATES}
+    LIMIT ${MAX_TITLE_MATCHES_PER_TIER}
   `,
   );
 
@@ -82,7 +84,7 @@ async function matchTitleIds(text: string): Promise<string[]> {
     SELECT id FROM "Job"
     WHERE embedding IS NOT NULL
     ORDER BY embedding <=> ${vecLit}::vector
-    LIMIT ${TITLE_CANDIDATES}
+    LIMIT ${MAX_TITLE_MATCHES_PER_TIER}
   `,
   );
 
@@ -101,14 +103,14 @@ async function matchCompanyIds(text: string): Promise<string[]> {
   if (exact.length > 0) return exact.map((r) => r.id);
 
   // Tier 2 — trigram: fuzzy fallback, best first. Caller keeps it only if the
-  // top score clears COMPANY_TRIGRAM_MIN (short names → strict floor).
+  // top score clears MIN_COMPANY_TRIGRAM_SIMILARITY (short names → strict floor).
   const trigram = await prisma.$queryRaw<{ id: string; score: number }[]>`
     SELECT id, similarity(name, ${text})::float AS score FROM "Company"
     WHERE name % ${text}
     ORDER BY score DESC
     LIMIT 5
   `;
-  if (trigram.length > 0 && trigram[0].score >= COMPANY_TRIGRAM_MIN) {
+  if (trigram.length > 0 && trigram[0].score >= MIN_COMPANY_TRIGRAM_SIMILARITY) {
     return trigram.map((r) => r.id);
   }
   return [];
@@ -186,12 +188,13 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
   // Candidate set = role-matched ∪ company-matched ∪ skill-matched (experience
   // stays a hard filter). Sub-scores, the blend, the per-tier floor, and the
   // final order/limit are all computed here so a 30-row LIMIT is correct top-N.
-  //   raw    → counts + raw cosine + tier flag
+  //   raw    → counts + raw cosine + tier (0 company, 1 role, 2 skill)
   //   sub    → skills% / projects% (cosine rescaled to [0–100])
   //   scored → blended score = mean of the non-null sub-scores
   //   ranked → row number within each tier (for the Best-match floor)
-  //   pick   → select RESULT_LIMIT rows (default: floor-15/tier then backfill by
-  //            score; score: pure top-N), then display role-tier-first for default.
+  //   pick   → select MAX_RESULTS rows (default: company tier in full, then
+  //            floor-15 of role/skill, then backfill by score; score: pure top-N),
+  //            then display company→role→skill for default.
   const rows = await prisma.$queryRaw<SearchRow[]>`
     -- 1) raw — the UNION candidate set: every job matching role, company, or skills
     --    (and passing the experience hard filter), carrying raw counts (matched /
@@ -213,10 +216,13 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
                FROM unnest(${projVecLits}::text[]) AS pv
              )
              ELSE NULL END AS "projSim",
-        (
-          (cardinality(${titleIds}::text[]) > 0 AND j.id = ANY(${titleIds}::text[]))
-          OR (cardinality(${companyIds}::text[]) > 0 AND j."companyId" = ANY(${companyIds}::text[]))
-        ) AS "roleOrCompanyMatched"
+        -- Tier: 0 company-matched (absolute top), 1 role-matched, 2 skill-only.
+        -- Company wins over role so a company's off-role jobs surface first.
+        CASE
+          WHEN cardinality(${companyIds}::text[]) > 0 AND j."companyId" = ANY(${companyIds}::text[]) THEN 0
+          WHEN cardinality(${titleIds}::text[]) > 0 AND j.id = ANY(${titleIds}::text[]) THEN 1
+          ELSE 2
+        END AS tier
       FROM "Job" j
       JOIN "Company" c ON c.id = j."companyId"
       -- Per job: count its skill tokens, how many a user skill covers, and how many
@@ -253,7 +259,7 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
         CASE WHEN ${hasSkills} AND required > 0
              THEN round(matched::numeric / required * 100)::int END AS "skillsPct",
         CASE WHEN ${hasProjVecs} AND "projSim" IS NOT NULL
-             THEN round((greatest(0, least(1, ("projSim" - ${PROJ_SIM_FLOOR}) / ${1.0 - PROJ_SIM_FLOOR})) * 100)::numeric)::int
+             THEN round((greatest(0, least(1, ("projSim" - ${MIN_PROJECT_SIMILARITY}) / ${1.0 - MIN_PROJECT_SIMILARITY})) * 100)::numeric)::int
              ELSE NULL
         END AS "projectsPct"
       FROM raw
@@ -270,37 +276,43 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
         END AS score
       FROM sub
     ),
-    -- 4) ranked — number each job within its tier (role/company vs the rest),
-    --    best score first. rn_in_tier ≤ TIER_FLOOR is the Best-match floor.
+    -- 4) ranked — number each job within its tier (company / role / skill),
+    --    best score first. rn_in_tier ≤ MIN_SLOTS_PER_TIER is the Best-match floor.
     ranked AS (
       SELECT scored.*,
         ROW_NUMBER() OVER (
-          PARTITION BY "roleOrCompanyMatched"
+          PARTITION BY tier
           ORDER BY score DESC NULLS LAST, "createdAt" ASC
         ) AS rn_in_tier
       FROM scored
     ),
-    -- 5) pick — SELECT which RESULT_LIMIT rows survive. default keeps the first
-    --    TIER_FLOOR of each tier (prio 0), then backfills remaining slots by
-    --    score (prio 1); score ignores tiers → global top-N by score.
+    -- 5) pick — SELECT which MAX_RESULTS rows survive. default takes every
+    --    company-matched row first (prio 0, even at 0% match), then the first
+    --    MIN_SLOTS_PER_TIER of the role/skill tiers (prio 1), then backfills by score
+    --    (prio 2); score ignores tiers → global top-N by score.
     pick AS (
       SELECT * FROM ranked
       ORDER BY
-        CASE WHEN ${sort} = 'default' AND rn_in_tier <= ${TIER_FLOOR} THEN 0 ELSE 1 END ASC,
+        CASE WHEN ${sort} = 'default' THEN
+          CASE WHEN tier = 0 THEN 0
+               WHEN rn_in_tier <= ${MIN_SLOTS_PER_TIER} THEN 1
+               ELSE 2 END
+          ELSE 0 END ASC,
         score DESC NULLS LAST,
         "createdAt" ASC
-      LIMIT ${RESULT_LIMIT}
+      LIMIT ${MAX_RESULTS}
     )
-    -- 6) final projection + DISPLAY order: default floats the role/company tier to
-    --    the top (then by score); score is already a pure by-score list.
+    -- 6) final projection + DISPLAY order: default shows company first, then role,
+    --    then skill (each by score); score is already a pure by-score list.
+    --    roleOrCompanyMatched (tier < 2) is preserved for the card/return shape.
     SELECT
       "jobId", "jobTitle", "companyName",
       "experienceMinYears", "experienceMaxYears", "focusRoundPattern",
-      matched, required, "skillsPct", "projectsPct", score, "roleOrCompanyMatched"
+      matched, required, "skillsPct", "projectsPct", score, (tier < 2) AS "roleOrCompanyMatched"
     FROM pick
-    -- Display: default shows the role/company tier first; score is pure by-%.
+    -- Display: default orders by tier (company → role → skill); score is pure by-%.
     ORDER BY
-      CASE WHEN ${sort} = 'default' AND "roleOrCompanyMatched" THEN 0 ELSE 1 END ASC,
+      CASE WHEN ${sort} = 'default' THEN tier ELSE 0 END ASC,
       score DESC NULLS LAST,
       "createdAt" ASC
   `;

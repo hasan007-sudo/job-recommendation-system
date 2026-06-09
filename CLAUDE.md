@@ -37,8 +37,8 @@ To run a single test file: `npx vitest run lib/__tests__/search.ranking.test.ts`
 
 **Search (`lib/search.ts`):** Resolves `{ companyText, roleText, skillNames, experienceYears, projectTexts, sort }` to a `JobCard[]`. The model has three parts:
 1. **Candidate set** — union of role-matched ∪ company-matched ∪ skill-matched jobs. Title matching is a 3-tier union: exact → trigram (`pg_trgm`) → vector (ANN). Company matching is exact → trigram. Experience is the one hard filter.
-2. **Match %** — equal blend of `skills%` (ILIKE token coverage) and `projects%` (MAX cosine similarity across project embeddings, rescaled at `PROJ_SIM_FLOOR = 0.40`). Computed entirely in a single SQL CTE — no post-SQL re-ranking.
-3. **Sort** — `default` gives role/company tier at least `TIER_FLOOR = 15` slots; `score` is pure top-N by match %.
+2. **Match %** — equal blend of `skills%` (ILIKE token coverage) and `projects%` (MAX cosine similarity across project embeddings, rescaled at `MIN_PROJECT_SIMILARITY = 0.40`). Computed entirely in a single SQL CTE — no post-SQL re-ranking.
+3. **Sort** — each candidate gets a `tier` (0 company, 1 role, 2 skill). `default` shows the company tier first (even at 0% match), then the role and skill tiers each get at least `MIN_SLOTS_PER_TIER = 15` of the remaining slots; `score` is pure top-N by match %.
 
 **Resume processing (`lib/resume.ts`):** Supports PDF (`unpdf`), DOCX (`mammoth`), TXT. Extracts text then calls an LLM via OpenRouter to return a structured `OnboardingProfile`. The profile drives search via `buildSearchInput()` in `lib/onboarding.ts`.
 

@@ -47,7 +47,7 @@ describe("company-only search", () => {
   });
 
   it("returns jobs when company name matches via trigram (score ≥ 0.4 threshold)", async () => {
-    // Exact fails; trigram similarity 0.5 clears the COMPANY_TRIGRAM_MIN = 0.4 floor.
+    // Exact fails; trigram similarity 0.5 clears the MIN_COMPANY_TRIGRAM_SIMILARITY = 0.4 floor.
     // matchCompanyIds returns the company id and the final SQL runs normally.
     q()
       .mockResolvedValueOnce([])                                      // company exact
@@ -65,7 +65,7 @@ describe("company-only search", () => {
   });
 
   it("returns [] when trigram score is below the 0.4 floor (false positives rejected)", async () => {
-    // Trigram similarity 0.3 < COMPANY_TRIGRAM_MIN → matchCompanyIds returns [].
+    // Trigram similarity 0.3 < MIN_COMPANY_TRIGRAM_SIMILARITY → matchCompanyIds returns [].
     // companyIds = [], titleMatches = [], skills = [] → guard fires → no final SQL.
     q()
       .mockResolvedValueOnce([])                                      // company exact

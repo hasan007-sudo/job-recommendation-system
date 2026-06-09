@@ -8,9 +8,9 @@ Companion to [`docs/search.md`](./search.md), which covers the end-to-end flow.
 > **Model in one line:** role, company, skills, and project keywords form a
 > **union** candidate set (a job qualifies if it matches *any*); experience is the
 > one **hard filter**; the displayed badge % is the **equal mean** of `skills%`
-> and `projects%`; and the **sort** decides whether role/company matches get
-> precedence (`default`) or pure match % wins (`score`). There is no weighted-sum
-> ranking — the old `WEIGHTS` constant is gone (see Q3).
+> and `projects%`; and the **sort** decides whether matches are tiered
+> **company → role → skill** (`default`) or pure match % wins (`score`). There is
+> no weighted-sum ranking — the old `WEIGHTS` constant is gone (see Q3).
 
 ---
 
@@ -50,7 +50,7 @@ SQL (the cosine score is never stored):
    ```
 2. **Project scoring** — each project's LLM-extracted keyword string is embedded
    separately; `projSim = MAX cosine(job.embedding, projVecLits[i])` across all
-   project vectors. Rescaled with `PROJ_SIM_FLOOR = 0.40` to filter Titan noise.
+   project vectors. Rescaled with `MIN_PROJECT_SIMILARITY = 0.40` to filter Titan noise.
 
 `<=>` is pgvector's cosine *distance* (0 = identical, 2 = opposite); `1 - distance`
 flips it to a similarity in roughly `[0,1]` for normalized vectors. Query vectors
@@ -157,23 +157,28 @@ D (empty)     no      no       no     → []  (guard)
 
 The **key change from the old model:** role and company are no longer an `AND`
 filter. In case C, typing a role *also* surfaces skill-matched non-role jobs —
-they appear **below** the role/company tier under the default sort (Q5), instead
-of being excluded. Skills alone can still carry a search, and role/company alone
-still return results (badge `—` when nothing is scored).
+they appear **below** the company and role tiers under the default sort (Q5),
+instead of being excluded. Skills alone can still carry a search, and role/company
+alone still return results (badge `—` when nothing is scored).
 
 ---
 
-## Q5. Why are role and company a *precedence tier* (not a hard filter), and why is experience the opposite?
+## Q5. Why are company and role *precedence tiers* (not a hard filter), and why is experience the opposite?
 
-**Role and company are strong-but-soft intent.** If you typed "SDE" you clearly
+**Company and role are strong-but-soft intent.** If you typed "SDE" you clearly
 prefer engineering roles — but you may still want a great skill match at a
-slightly different title rather than seeing *nothing else*. So role/company
-matches are tracked with a `roleOrCompanyMatched` flag and floated to the **top**
-of the default sort, while non-matching skill/project hits remain available below.
-The user picks the trade-off with the sort toggle:
+slightly different title rather than seeing *nothing else*. And if you also typed a
+**company**, you want to see *that company's* roles first — even ones that don't
+match your skills at all. So each candidate gets a `tier`: **0 company-matched,
+1 role-matched, 2 skill-only** (company wins over role, so a company's off-role
+jobs surface above other companies' role matches). The card still exposes the
+derived `roleOrCompanyMatched` (`tier < 2`). The user picks the trade-off with the
+sort toggle:
 
-- **`default` (Best match):** `roleOrCompanyMatched DESC, score DESC` — role/company
-  on top, then by blended %.
+- **`default` (Best match):** `tier ASC, score DESC` — company first (shown in full,
+  even at 0% match), then role, then skill; each tier ordered by blended %. The role
+  and skill tiers are each guaranteed up to `MIN_SLOTS_PER_TIER = 15` of the slots
+  the company tier didn't take, then backfill by score.
 - **`score` (Match score):** `score DESC` — pure match %, tier ignored.
 
 **Experience is a genuine hard constraint.** A 3-year candidate shouldn't see a
@@ -224,16 +229,18 @@ score   (Match score): B (52%)  ▸  A (29%)                ← pure blend wins
 Under `default`, Job A leads despite a lower %, because role precedence is the
 explicit intent; switch to `score` and Job B — the stronger overall match — takes
 the top. (Job B's `projectsPct` uses the MAX cosine of the project keyword vectors
-against the job embedding, rescaled above `PROJ_SIM_FLOOR = 0.40`.) `default` also guarantees each tier up to `TIER_FLOOR = 15` of the 30
-slots (then backfills by score), so skill-based jobs always get a share; `score`
-is a pure top-30 by %. Either way the SQL `LIMIT 30` (`RESULT_LIMIT`) is exact
-because the blend is the `ORDER BY` key.
+against the job embedding, rescaled above `MIN_PROJECT_SIMILARITY = 0.40`.) This
+query has no company, so its tiers are role (1) vs skill (2); add a company and its
+jobs would form tier 0 above both. `default` guarantees the role and skill tiers up
+to `MIN_SLOTS_PER_TIER = 15` of the 30 slots each (then backfills by score), so
+skill-based jobs always get a share; `score` is a pure top-30 by %. Either way the
+SQL `LIMIT 30` (`MAX_RESULTS`) is exact because the blend is the `ORDER BY` key.
 
 ```
-role tier  ─► roleOrCompanyMatched flag ─┐
-                                          ├─ default: tier first, then score
-skillsPct ─┐                              │  score:   score only
-projectsPct ┴─ mean ─► blended score ─────┘
+tier (0 company / 1 role / 2 skill) ─┐
+                                     ├─ default: tier asc, then score
+skillsPct ─┐                         │  score:   score only
+projectsPct ┴─ mean ─► blended score ┘
    (keyword overlap, else project↔job cosine)
 ```
 

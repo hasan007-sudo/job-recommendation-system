@@ -93,10 +93,10 @@ Constant in `lib/search.ts`:
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `PROJ_SIM_FLOOR` | `0.40` | Below this → 0 %. Filters background Titan noise (~0.10–0.20). |
+| `MIN_PROJECT_SIMILARITY` | `0.40` | Below this → 0 %. Filters background Titan noise (~0.10–0.20). |
 
 The ceiling is always `1.0` (the max possible cosine), so scores scale naturally
-across the full remaining range. Tune `PROJ_SIM_FLOOR` upward to tighten
+across the full remaining range. Tune `MIN_PROJECT_SIMILARITY` upward to tighten
 relevance, downward to widen it.
 
 **Blend:**
@@ -140,7 +140,7 @@ Embedded → vector `V_proj`.
 1. **Keyword quality depends on the LLM.** Vague project descriptions produce vague
    keywords; detailed descriptions produce more discriminating vectors.
 2. **Titan embedding space.** Cosine similarity between loosely related domains can
-   still be 0.35–0.45, so `PROJ_SIM_FLOOR` requires ongoing calibration as more
+   still be 0.35–0.45, so `MIN_PROJECT_SIMILARITY` requires ongoing calibration as more
    jobs are indexed.
 3. **Projects don't open the candidate pool.** A candidate whose only relevant
    experience is in projects (no overlapping skills or role) won't see those jobs

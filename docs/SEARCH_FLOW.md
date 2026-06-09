@@ -6,7 +6,7 @@ The model has three parts:
 
 1. **Candidate set (a union).** Role (title), company, and skills each *bring jobs in*. A job qualifies if it matches **any** of them. Experience is the one hard filter — out-of-band jobs are excluded. Projects only **score** candidates; they do not add new ones.
 2. **Match % (an equal blend).** Each job is scored on up to two sub-scores — **skills%** and **projects%** — averaged into one headline %. Experience is *not* scored.
-3. **Sort.** `default` ("Best match") puts role/company matches on top, then ranks by match %. `score` ("Match score") ignores the tier and ranks purely by match %.
+3. **Sort.** `default` ("Best match") tiers results **company → role → skill**: a searched company's jobs come first (even at 0% match), then role matches from other companies, then skill-only matches — each tier ranked internally by match %. `score` ("Match score") ignores the tier and ranks purely by match %.
 
 ```
 { companyText, roleText, skillNames, experienceYears, projectTexts[], sort }
@@ -34,12 +34,14 @@ The model has three parts:
    │       OR  skill coverage > 0 )             ← UNION       │
    │   skillsPct = coverage·100                              │
    │   projectsPct = MAX cosine(projVecLits[], job.embedding)│
-   │               rescaled (PROJ_SIM_FLOOR=0.40 → 1.0)     │
+   │               rescaled (MIN_PROJECT_SIMILARITY=0.40)   │
    │   score = mean(non-null [skillsPct, projectsPct])       │
-   │   rn_in_tier = ROW_NUMBER() per roleOrCompanyMatched    │
-   │   ── default: floor 15/tier, backfill by score          │
+   │   tier = 0 company · 1 role · 2 skill                   │
+   │   rn_in_tier = ROW_NUMBER() per tier                    │
+   │   ── default: company tier in full, then floor 15 of    │
+   │      role/skill, then backfill by score                 │
    │   ── score:   pure top-N by score                       │
-   │   LIMIT 30  (RESULT_LIMIT)                              │
+   │   LIMIT 30  (MAX_RESULTS)                               │
    └────────────────────────────────────────────────────────┘
                  ▼
    ┌────────────────────────────────────────────────────────┐
@@ -86,14 +88,14 @@ function normalize(text: string): string {
 
 ## Title matching — `matchTitleIds(roleText)`
 
-Runs **all three tiers and unions their ids** into a `Set`. A generic query like `"Software Engineer"` should surface both the exact title and related real titles, so we union the tiers rather than stopping at the first hit. Each tier is capped at `TITLE_CANDIDATES = 20`. Title only decides **membership** (it never ranks the final list — the blended match % does), so each tier selects **ids only**; the per-tier similarity stays in `ORDER BY` purely to pick the top 20.
+Runs **all three tiers and unions their ids** into a `Set`. A generic query like `"Software Engineer"` should surface both the exact title and related real titles, so we union the tiers rather than stopping at the first hit. Each tier is capped at `MAX_TITLE_MATCHES_PER_TIER = 20`. Title only decides **membership** (it never ranks the final list — the blended match % does), so each tier selects **ids only**; the per-tier similarity stays in `ORDER BY` purely to pick the top 20.
 
 **Tier 1 — exact:**
 ```sql
 SELECT id FROM "Job" WHERE lower("jobTitle") = $norm LIMIT 20
 ```
 
-**Tier 2 — trigram** (floor `TITLE_TRIGRAM_MIN = 0.3`):
+**Tier 2 — trigram** (floor `MIN_TITLE_TRIGRAM_SIMILARITY = 0.3`):
 ```sql
 SELECT id FROM "Job"
 WHERE "jobTitle" % $text AND similarity("jobTitle", $text) >= 0.3
@@ -140,10 +142,10 @@ SELECT id FROM "Company" WHERE lower(name) = $norm LIMIT 5;
 // Tier 2: trigram — accept only if top score clears the floor
 SELECT id, similarity(name, $text) AS score FROM "Company"
 WHERE name % $text ORDER BY score DESC LIMIT 5;
-// keep only if score[0] >= COMPANY_TRIGRAM_MIN (0.4)
+// keep only if score[0] >= MIN_COMPANY_TRIGRAM_SIMILARITY (0.4)
 ```
 
-`COMPANY_TRIGRAM_MIN = 0.4` is strict because company names are short and false positives are costly. A miss returns `[]`.
+`MIN_COMPANY_TRIGRAM_SIMILARITY = 0.4` is strict because company names are short and false positives are costly. A miss returns `[]`.
 
 ---
 
@@ -170,7 +172,9 @@ WITH raw AS (          -- union candidate set + raw counts/cosine + tier flag
          THEN (SELECT MAX((1 - (j.embedding <=> pv::vector))::float)
                FROM unnest($projVecLits::text[]) AS pv)
          ELSE NULL END                                                AS "projSim",
-    ( job ∈ titleIds OR company ∈ companyIds )                        AS "roleOrCompanyMatched"
+    CASE WHEN company ∈ companyIds THEN 0                             -- tier:
+         WHEN job ∈ titleIds       THEN 1                             --  0 company
+         ELSE 2 END                                          AS tier  --  1 role / 2 skill
   FROM "Job" j JOIN "Company" c ON c.id = j."companyId"
   CROSS JOIN LATERAL ( -- over j.requiredSkills split on , ; |
     --   matched  = job skill tokens covered by any input skill  (ILIKE substring)
@@ -184,15 +188,20 @@ WITH raw AS (          -- union candidate set + raw counts/cosine + tier flag
 sub AS (    SELECT *, skillsPct, projectsPct FROM raw ),     -- see Scoring below
 scored AS ( SELECT *, score = mean(non-null [skillsPct, projectsPct]) FROM sub ),
 ranked AS ( SELECT *,
-              ROW_NUMBER() OVER (PARTITION BY "roleOrCompanyMatched"
+              ROW_NUMBER() OVER (PARTITION BY tier
                                  ORDER BY score DESC NULLS LAST, "createdAt") AS rn_in_tier
             FROM scored ),
 pick AS (   SELECT * FROM ranked          -- SELECTION (which 30)
-            ORDER BY CASE WHEN $sort='default' AND rn_in_tier <= 15 THEN 0 ELSE 1 END,
+            ORDER BY CASE WHEN $sort='default' THEN              -- company first,
+                       CASE WHEN tier = 0 THEN 0                 -- then floor 15 of
+                            WHEN rn_in_tier <= 15 THEN 1         -- role/skill, then
+                            ELSE 2 END                           -- backfill by score
+                       ELSE 0 END,
                      score DESC NULLS LAST, "createdAt"
-            LIMIT 30 )                                                        -- RESULT_LIMIT
-SELECT * FROM pick                         -- DISPLAY order
-ORDER BY CASE WHEN $sort='default' AND "roleOrCompanyMatched" THEN 0 ELSE 1 END,
+            LIMIT 30 )                                                        -- MAX_RESULTS
+SELECT *, (tier < 2) AS "roleOrCompanyMatched"  -- DISPLAY order
+FROM pick
+ORDER BY CASE WHEN $sort='default' THEN tier ELSE 0 END,
          score DESC NULLS LAST, "createdAt";
 ```
 
@@ -203,7 +212,7 @@ A job enters the set if it matches **any** signal:
 - **Company** — `j."companyId" ∈ companyIds` from `matchCompanyIds`.
 - **Skills** — `matched > 0`: the job shares ≥1 of the typed skills.
 
-Typing a role therefore **also** surfaces skill-matched jobs that don't match the role. **Experience is the only hard filter**: the typed years must fall inside the job's `[min, max]` band (null input → disabled; null job bounds → open-ended `0`/`99`). Experience is never scored or shown. `roleOrCompanyMatched` records whether a job came in via the role/company tier; it drives the default sort and the floor.
+Typing a role therefore **also** surfaces skill-matched jobs that don't match the role. **Experience is the only hard filter**: the typed years must fall inside the job's `[min, max]` band (null input → disabled; null job bounds → open-ended `0`/`99`). Experience is never scored or shown. `tier` records how a job qualified — `0` company, `1` role, `2` skill-only — and drives the default sort and the floor. The card/return shape still carries `roleOrCompanyMatched`, now derived as `tier < 2`.
 
 ---
 
@@ -226,7 +235,7 @@ projSim     = MAX cosine(job.embedding, projVecLits[i])   for i in projects
 projectsPct = round( clamp( (projSim - 0.40) / 0.60, 0, 1 ) × 100 )
 ```
 
-`PROJ_SIM_FLOOR = 0.40` filters Titan's background noise (~0.10–0.20 for unrelated texts). No project keywords → `projectsPct` null (projectless candidates aren't penalized).
+`MIN_PROJECT_SIMILARITY = 0.40` filters Titan's background noise (~0.10–0.20 for unrelated texts). No project keywords → `projectsPct` null (projectless candidates aren't penalized).
 
 ### Blend
 ```
@@ -236,16 +245,17 @@ Both null → `score` null → badge `—`. The card hover shows the `Skills%` /
 
 ---
 
-## Sort modes — and the 15-floor / backfill
+## Sort modes — company → role → skill, with the 15-floor / backfill
 
 The blend is the SQL `ORDER BY` key, so each mode `LIMIT 30` correctly. The UI toggle (`Best match` / `Match score`) re-runs the search with the chosen mode.
 
-- **`default` (Best match):** role/company matches on top, but each tier is **guaranteed up to `TIER_FLOOR = 15` slots**, then the list **backfills toward 30** by score.
-  - *Selection* (`pick`): `rn_in_tier ≤ 15` of each tier is kept first, remaining slots filled by `score DESC`. So 40 role + 3 skill → 27 role + 3 skill (skill floor honored, role backfills); 3 role + 40 skill → 3 role + 27 skill.
-  - *Display*: role/company tier first, then by `score`.
-- **`score` (Match score):** pure `score DESC` top-30, tier ignored — a higher-scoring non-role job can top the list.
+- **`default` (Best match):** three tiers in order — **company (0) → role (1) → skill (2)**.
+  - *Company tier* is shown **in full and first**, even at 0% match: searching a company means you see that company's roles. (A role+company job counts as company.)
+  - *Role and skill tiers* are each **guaranteed up to `MIN_SLOTS_PER_TIER = 15` slots** of whatever the company tier didn't consume, then the list **backfills toward 30** by score. So 40 role + 3 skill → 27 role + 3 skill (skill floor honored, role backfills); 3 role + 40 skill → 3 role + 27 skill.
+  - *Display*: by tier (company, then role, then skill), each ordered by `score`.
+- **`score` (Match score):** pure `score DESC` top-30, tier ignored — a higher-scoring non-company job can top the list.
 
-> Worked example: a resume matches **JD-X** (role-name match, 5/10 skills) and **JD-Y** (no role match, 10/10 skills). `default` → JD-X above JD-Y (role tier wins). `score` → JD-Y above JD-X (higher blend).
+> Worked example: searching role "Engineer" + company "VakilSearch". `default` → VakilSearch's jobs first (company tier, even at low match), then other companies' engineer jobs by score, then skill-only. `score` → ordered purely by match %, VakilSearch not floated.
 
 The thin JS mapper then parses `focusRoundPattern` into rounds and maps `experienceMinYears` to a display `seniority` via `deriveSeniority` (`≤2 entry`, `≤6 mid`, else `senior`) — no re-sorting (SQL already ordered + limited).
 
@@ -255,12 +265,12 @@ The thin JS mapper then parses `focusRoundPattern` into rounds and maps `experie
 
 | Stage | Limit | Constant |
 |---|---|---|
-| Title tier — exact / trigram / vector (each) | 20 | `TITLE_CANDIDATES` |
+| Title tier — exact / trigram / vector (each) | 20 | `MAX_TITLE_MATCHES_PER_TIER` |
 | Company tier — exact / trigram (each) | 5 | literal |
-| Best-match floor — slots guaranteed per tier | 15 | `TIER_FLOOR` |
-| Final list returned / displayed (and SQL `LIMIT`) | 30 | `RESULT_LIMIT` |
+| Best-match floor — slots guaranteed for role & skill tiers | 15 | `MIN_SLOTS_PER_TIER` |
+| Final list returned / displayed (and SQL `LIMIT`) | 30 | `MAX_RESULTS` |
 
-Retrieval equals display: the query computes the blend in SQL and `LIMIT 30`s directly — there is no oversized candidate pool. Under `default`, each tier (role/company vs skill/project) is guaranteed up to 15 of those 30, then the other backfills toward 30. Role backfill is in turn bounded by how many ids the title tiers yield (≤20 each).
+Retrieval equals display: the query computes the blend in SQL and `LIMIT 30`s directly — there is no oversized candidate pool. Under `default`, the company tier is shown first in full, then the role and skill tiers are each guaranteed up to 15 of the remaining slots before backfilling toward 30. Role backfill is in turn bounded by how many ids the title tiers yield (≤20 each).
 
 ---
 
@@ -268,11 +278,12 @@ Retrieval equals display: the query computes the blend in SQL and `LIMIT 30`s di
 
 | Input | Candidate set | Score | Order (default) |
 |---|---|---|---|
-| `Accenture` | Accenture jobs (company tier) | badge `—` (no skills) | role/company tier, then recency |
-| `SDE` | title matches **∪** any skill/project matches | skills/projects where present | title matches first |
+| `Accenture` | Accenture jobs (company tier) | badge `—` (no skills) | company tier, then recency |
+| `SDE` | title matches **∪** any skill/project matches | skills/projects where present | role tier first |
 | `[React, Node.js]` | jobs sharing ≥1 skill | coverage % (+ projects if resume) | by blended % |
-| `SDE` + `[React]` + `3 yrs` | title ∪ skill matches, band-filtered | React coverage (+ projects) | title matches first, then % |
-| resume w/ projects | (no extra candidates) | skills% **and** projects% blended | role/company first, then % |
+| `SDE` + `[React]` + `3 yrs` | title ∪ skill matches, band-filtered | React coverage (+ projects) | role tier first, then % |
+| `SDE` + `Accenture` | title ∪ Accenture ∪ skill matches | skills/projects where present | Accenture jobs first, then role, then skill |
+| resume w/ projects | (no extra candidates) | skills% **and** projects% blended | role tier first, then % |
 | nothing | — | — | `[]` (guard) |
 
 ---
