@@ -82,10 +82,10 @@ const SEED_JOBS: SeedJob[] = [
       "Write prompts to auto-generate test cases; Build regression suites with AI copilots; Validate accuracy, relevance & consistency of AI responses; Detect factual drift, bias and unsafe content; Test multi-agent pipelines end-to-end; Monitor training and inference data quality.",
     fullJobDescription:
       "Change Pond — QA / Tester (AI-Augmented Quality Engineer). Core Skills: prompt engineering for test generation, AI-assisted test automation, LLM output validation, risk-based testing. New Capabilities: test AI model behaviour, hallucination & bias checks, agentic workflow validation, GenAI tool orchestration. Data & Domain: data quality & drift detection, domain-specific test design, synthetic data generation. Mindset Shifts: from scripted to exploratory testing, AI output auditor, collaborative with AI copilots.",
-    roundScreening: "Prompt engineering for test gen; AI-assisted test automation; LLM output validation; Risk-based testing",
+    roundScreening: "Software testing fundamentals; Risk-based testing mindset; Familiarity with AI/LLM-driven testing",
     roundBehavioural: "Scripted to exploratory testing; AI output auditor; Collaboration with AI copilots",
     roundTechnical:
-      "Test AI model behaviour; Hallucination & bias checks; Agentic workflow validation; GenAI tool orchestration; Data quality & drift detection; Synthetic data generation",
+      "Prompt engineering for test generation; AI-assisted test automation; LLM output validation; Test AI model behaviour; Hallucination & bias checks; Agentic workflow validation; GenAI tool orchestration; Data quality & drift detection; Synthetic data generation",
     roundCultureFit: COMMON_DNA,
     experienceMinYears: null,
     experienceMaxYears: null,
@@ -109,10 +109,10 @@ const SEED_JOBS: SeedJob[] = [
       "Craft precise prompts and context windows; Work alongside AI pair-programming tools; Integrate OpenAI, Anthropic and Gemini APIs; Critically review, refactor and validate AI-generated code; Build multi-step autonomous agent pipelines; Design retrieval-augmented generation architectures; Implement input validation, rate limiting and content filters.",
     fullJobDescription:
       "Change Pond — Developer (AI-Native Software Engineer). Core Skills: prompt & context engineering, AI pair programming, LLM API integration, code review of AI output. New Capabilities: agentic workflow design, RAG & vector DB fundamentals, fine-tuning & model selection, AI security & guardrails. Architecture: systems thinking, feedback loop design, data pipeline fluency. Mindset Shifts: director not just coder, responsible AI coding, deep AI curiosity.",
-    roundScreening: "Prompt & context engineering; AI pair programming; LLM API integration; Code review of AI output",
+    roundScreening: "Programming fundamentals; Familiarity with AI pair-programming tools; Code review basics",
     roundBehavioural: "Director not just coder; Responsible AI coding; Deep AI curiosity",
     roundTechnical:
-      "Agentic workflow design; RAG & vector DB fundamentals; Fine-tuning & model selection; AI security & guardrails; Systems thinking; Feedback loop design; Data pipeline fluency",
+      "Prompt & context engineering; LLM API integration; Code review of AI output; Agentic workflow design; RAG & vector DB fundamentals; Fine-tuning & model selection; AI security & guardrails; Systems thinking; Feedback loop design; Data pipeline fluency",
     roundCultureFit: COMMON_DNA,
     experienceMinYears: null,
     experienceMaxYears: null,
@@ -136,10 +136,10 @@ const SEED_JOBS: SeedJob[] = [
       "Identify where GenAI creates business value; Map human workflows to AI-augmentation opportunities; Interpret data outputs and present AI insights to stakeholders; Write specs accounting for non-deterministic AI behaviour; Build business cases for AI investment; Design human-AI complementary workflows; Lead AI adoption and change management.",
     fullJobDescription:
       "Change Pond — Business Analyst (AI-Enabled Solution Strategist). Core Skills: AI use-case ideation, process automation mapping, data literacy & storytelling, requirements for AI systems. New Capabilities: AI ROI & feasibility analysis, prompt-based prototyping, human-AI workflow design, change management for AI. Stakeholder: AI ethics & responsible use, cross-functional facilitation, client AI literacy building. Mindset Shifts: from requirements to co-design, bridge builder, AI literacy champion.",
-    roundScreening: "AI use-case ideation; Process automation mapping; Data literacy & storytelling; Requirements for AI systems",
+    roundScreening: "Business analysis fundamentals; AI use-case awareness; Stakeholder communication",
     roundBehavioural: "Requirements to co-design; Bridge builder; AI literacy champion",
     roundTechnical:
-      "AI ROI & feasibility analysis; Prompt-based prototyping; Human-AI workflow design; Change management for AI; Cross-functional facilitation; Client AI literacy building",
+      "AI use-case ideation; Process automation mapping; Requirements for AI systems; AI ROI & feasibility analysis; Prompt-based prototyping; Human-AI workflow design; Change management for AI; Data literacy & storytelling",
     roundCultureFit: COMMON_DNA,
     experienceMinYears: null,
     experienceMaxYears: null,
@@ -163,10 +163,10 @@ const SEED_JOBS: SeedJob[] = [
       "Define practice-wide AI adoption strategy and milestones; Reshape delivery economics with AI productivity gains; Build structured upskilling programs across roles; Develop AI frameworks, accelerators and assets; Set guardrails and responsible-AI policies; Redesign teams for AI-augmented delivery; Shift to outcome-based engagement models; Advise C-suite client stakeholders on AI.",
     fullJobDescription:
       "Change Pond — Practice Leader (AI Transformation Champion). Core Skills: GenAI strategy & roadmapping, practice P&L with AI leverage, talent re-skilling leadership, thought leadership & IP creation. New Capabilities: AI governance & policy setting, new delivery model design, outcome-based pricing with AI, AI vendor & partner management. Leadership: AI ethics oversight, innovation culture building, client advisory on AI. Mindset Shifts: headcount to outcomes, learning practice builder, ethics & quality bar setter.",
-    roundScreening: "GenAI strategy & roadmapping; Practice P&L with AI leverage; Talent re-skilling leadership; Thought leadership & IP creation",
+    roundScreening: "Delivery leadership fundamentals; AI strategy awareness; Stakeholder & client communication",
     roundBehavioural: "Headcount to outcomes; Learning practice builder; Ethics & quality bar setter",
     roundTechnical:
-      "AI governance & policy setting; New delivery model design; Outcome-based pricing with AI; AI vendor & partner management; Innovation culture building; Client advisory on AI",
+      "GenAI strategy & roadmapping; Practice P&L with AI leverage; AI governance & policy setting; New delivery model design; Outcome-based pricing with AI; AI vendor & partner management; Talent re-skilling leadership",
     roundCultureFit: COMMON_DNA,
     experienceMinYears: null,
     experienceMaxYears: null,
