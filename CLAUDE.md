@@ -21,6 +21,12 @@ To run a single test file: `npx vitest run lib/__tests__/search.ranking.test.ts`
 - `AWS_REGION` — for Amazon Bedrock (embeddings); credentials resolve from the standard AWS chain
 - `OPENROUTER_API_KEY` — resume parsing LLM calls via OpenRouter (OpenAI-compatible endpoint)
 
+### LiveKit voice interview (optional; required only for the in-round "Start interview" flow)
+- `LIVEKIT_URL` — LiveKit server `wss://…` URL (used by both the server SDK and returned to the client)
+- `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` — server-side token minting, room creation, agent dispatch
+- `LIVEKIT_AGENT_NAME` — dispatch name the agent worker registers under (defaults to `intervoo-agent`)
+- `LIVEKIT_AGENT_ID` — agent profile selected via room metadata (defaults to `diagnostic_v2`, the no-ChromaDB flow)
+
 ## Architecture
 
 **Two routes, two design eras:**

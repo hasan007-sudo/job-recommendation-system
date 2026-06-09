@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1061.0",
+    "@livekit/components-react": "^2.0.0",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@tailwindcss/postcss": "^4.3.0",
@@ -19,6 +20,8 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.2.3",
+    "livekit-client": "^2.0.0",
+    "livekit-server-sdk": "^2.15.2",
     "lru-cache": "^11.5.0",
     "lucide-react": "^0.553.0",
     "mammoth": "^1.12.0",

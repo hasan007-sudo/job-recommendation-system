@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { analyzeResume, extractResumeText } from "../../../../lib/resume";
+import { parseResume } from "../../../../lib/resume";
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -21,8 +21,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const text = await extractResumeText(file);
-    const profile = await analyzeResume(text);
+    const profile = await parseResume(file);
     return NextResponse.json({ profile });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not parse resume.";

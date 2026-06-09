@@ -3,11 +3,12 @@
 import { use, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ExternalLink, Loader2, Sparkles } from "lucide-react";
+import { ArrowLeft, ExternalLink, Loader2, Phone, Sparkles } from "lucide-react";
 import type { Round } from "../../../lib/rounds";
 import type { OnboardingProfile } from "../../../lib/onboarding";
 import { formatExperience, matchPill, initials } from "../../../lib/display";
 import { getJson, postJson } from "../../../lib/api";
+import { InterviewSession } from "../../../components/ui/InterviewSession";
 
 type JobDetail = {
   job: {
@@ -227,8 +228,39 @@ function RoundItem({
   const [questions, setQuestions] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [session, setSession] = useState<{ token: string; serverUrl: string } | null>(null);
 
   const mins = ROUND_MINUTES[round.slug] ?? 10;
+
+  async function startInterview() {
+    if (!questions || questions.length === 0) return;
+    setStarting(true);
+    setStartError(null);
+    try {
+      const result = await postJson<{
+        participant_token?: string;
+        server_url?: string;
+        error?: string;
+      }>("/api/livekit/token", {
+        jobId: job.jobId,
+        roundSlug: round.slug,
+        roundTitle: round.title,
+        questions,
+        candidateName: profile?.name,
+        jobTitle: job.jobTitle,
+      });
+      if (result.error || !result.participant_token || !result.server_url) {
+        throw new Error(result.error ?? "Failed to start interview.");
+      }
+      setSession({ token: result.participant_token, serverUrl: result.server_url });
+    } catch (e) {
+      setStartError(e instanceof Error ? e.message : "Failed to start interview.");
+    } finally {
+      setStarting(false);
+    }
+  }
 
   async function generate() {
     setLoading(true);
@@ -325,16 +357,43 @@ function RoundItem({
                   </li>
                 ))}
               </ol>
-              <button
-                onClick={generate}
-                className="mt-5 text-[12px] font-bold uppercase tracking-[0.18em] text-indigo-600 hover:text-indigo-800"
-              >
-                Regenerate
-              </button>
+              <div className="mt-5 flex items-center gap-4">
+                <button
+                  onClick={startInterview}
+                  disabled={starting}
+                  className="inline-flex h-10 items-center gap-2 rounded-lg bg-indigo-600 px-4 text-[13px] font-bold uppercase tracking-[0.18em] text-white hover:bg-indigo-700 active:bg-indigo-800 disabled:opacity-60"
+                >
+                  {starting ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Phone size={13} />
+                  )}
+                  {starting ? "Starting…" : "Start interview"}
+                </button>
+                <button
+                  onClick={generate}
+                  className="text-[12px] font-bold uppercase tracking-[0.18em] text-indigo-600 hover:text-indigo-800"
+                >
+                  Regenerate
+                </button>
+              </div>
+              {startError && (
+                <p className="mt-3 text-[13px] text-rose-600">{startError}</p>
+              )}
             </div>
           )}
         </div>
       </div>
+
+      {session && (
+        <InterviewSession
+          token={session.token}
+          serverUrl={session.serverUrl}
+          roundTitle={round.title}
+          jobTitle={job.jobTitle}
+          onClose={() => setSession(null)}
+        />
+      )}
     </li>
   );
 }

@@ -1,39 +1,78 @@
-import { extractText, getDocumentProxy } from "unpdf";
 import mammoth from "mammoth";
 import { z } from "zod";
 import type { OnboardingProfile } from "./onboarding";
 
 const MAX_RESUME_CHARS = 8000;
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+// DOCX embedded images are attached as image_url vision parts. Cap the count and
+// drop tiny images (icons/logos/bullets) to control vision cost and noise.
+const MAX_DOCX_IMAGES = 10;
+const MIN_DOCX_IMAGE_BYTES = 3 * 1024;
+
+// OpenAI-compatible content parts sent to OpenRouter as the user message.
+type TextPart = { type: "text"; text: string };
+type FilePart = { type: "file"; file: { filename: string; file_data: string } };
+type ImagePart = { type: "image_url"; image_url: { url: string } };
+type ContentPart = TextPart | FilePart | ImagePart;
+type UserContent = string | ContentPart[];
+
+type OcrPlugin = { id: "file-parser"; pdf: { engine: string } };
 
 // ---------------------------------------------------------------------------
-// 1. Text extraction (PDF via unpdf, DOCX via mammoth, plain text otherwise)
+// 1. Content extraction per file type. PDFs are sent whole to OpenRouter's OCR
+//    plugin (image-only content survives); DOCX yields text + embedded images;
+//    TXT is plain text. Everything funnels through runExtraction below.
 // ---------------------------------------------------------------------------
 
+// TXT only — DOCX has its own extractor (it also needs images), PDF skips text.
 export async function extractResumeText(file: File): Promise<string> {
-  const name = file.name.toLowerCase();
-  let raw: string;
-
-  if (name.endsWith(".pdf")) {
-    const buf = new Uint8Array(await file.arrayBuffer());
-    const pdf = await getDocumentProxy(buf);
-    const { text } = await extractText(pdf, { mergePages: true });
-    raw = text;
-  } else if (name.endsWith(".docx")) {
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const { value } = await mammoth.extractRawText({ buffer });
-    raw = value;
-  } else if (name.endsWith(".txt")) {
-    raw = await file.text();
-  } else {
+  if (!file.name.toLowerCase().endsWith(".txt")) {
     throw new Error("Unsupported file type. Upload a PDF, DOCX, or TXT resume.");
   }
-
-  const text = raw.replace(/\s+/g, " ").trim().slice(0, MAX_RESUME_CHARS);
+  const text = (await file.text()).replace(/\s+/g, " ").trim().slice(0, MAX_RESUME_CHARS);
   if (text.length < 100) {
     throw new Error("Could not read enough text from this file. Try a different resume.");
   }
   return text;
+}
+
+// DOCX → text (mammoth) + embedded images. Images are harvested via a custom
+// convertImage handler during convertToHtml; the HTML output is discarded — we
+// only collect the binaries so text baked into a pasted screenshot is not lost.
+async function extractDocx(file: File): Promise<{ text: string; images: ImagePart[] }> {
+  const buffer = Buffer.from(await file.arrayBuffer());
+
+  const images: ImagePart[] = [];
+  await mammoth.convertToHtml(
+    { buffer },
+    {
+      convertImage: mammoth.images.imgElement(async (image) => {
+        const base64 = await image.readAsBase64String();
+        const bytes = Math.floor((base64.length * 3) / 4);
+        if (bytes >= MIN_DOCX_IMAGE_BYTES && images.length < MAX_DOCX_IMAGES) {
+          images.push({
+            type: "image_url",
+            image_url: { url: `data:${image.contentType};base64,${base64}` },
+          });
+        }
+        return { src: "" };
+      }),
+    },
+  );
+
+  const { value } = await mammoth.extractRawText({ buffer });
+  const text = value.replace(/\s+/g, " ").trim().slice(0, MAX_RESUME_CHARS);
+
+  // A DOCX with neither readable text nor images is unusable.
+  if (text.length < 100 && images.length === 0) {
+    throw new Error("Could not read enough text from this file. Try a different resume.");
+  }
+  return { text, images };
+}
+
+async function fileToDataUri(file: File, mime: string): Promise<string> {
+  const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
+  return `data:${mime};base64,${base64}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +126,10 @@ const ParsedResume = z.object({
 });
 type ParsedResume = z.infer<typeof ParsedResume>;
 
-export async function analyzeResume(text: string): Promise<OnboardingProfile> {
+// Shared LLM call: takes the already-built user content (a plain string, or
+// content parts for PDF/DOCX) and an optional plugin (PDF OCR), returns the
+// mapped profile. All file types funnel through here.
+async function runExtraction(userContent: UserContent, plugin?: OcrPlugin): Promise<OnboardingProfile> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error("OPENROUTER_API_KEY is not set.");
@@ -107,8 +149,9 @@ export async function analyzeResume(text: string): Promise<OnboardingProfile> {
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: `Resume:\n\n${text}\n\nReturn the JSON object only.` },
+        { role: "user", content: userContent },
       ],
+      ...(plugin ? { plugins: [plugin] } : {}),
     }),
   });
 
@@ -128,6 +171,46 @@ export async function analyzeResume(text: string): Promise<OnboardingProfile> {
   }
 
   return mapToProfile(ParsedResume.parse(raw));
+}
+
+// Single entry point: dispatch on file type, build the right user content, and
+// run the shared extraction.
+export async function parseResume(file: File): Promise<OnboardingProfile> {
+  const name = file.name.toLowerCase();
+
+  if (name.endsWith(".pdf")) {
+    // PDF whole-file → OCR plugin (mistral-ocr). Model-agnostic: the plugin
+    // parses the document (including image-only content) before the model sees it.
+    const dataUri = await fileToDataUri(file, "application/pdf");
+    const content: ContentPart[] = [
+      { type: "text", text: "Resume document attached. Return the JSON object only." },
+      { type: "file", file: { filename: file.name, file_data: dataUri } },
+    ];
+    return runExtraction(content, { id: "file-parser", pdf: { engine: "mistral-ocr" } });
+  }
+
+  if (name.endsWith(".docx")) {
+    const { text, images } = await extractDocx(file);
+    if (images.length === 0) {
+      // No images → plain text path, no vision needed.
+      return runExtraction(`Resume:\n\n${text}\n\nReturn the JSON object only.`);
+    }
+    const content: ContentPart[] = [
+      {
+        type: "text",
+        text: `Resume text plus attached images (read text inside the images too). Return the JSON object only.\n\n${text}`,
+      },
+      ...images,
+    ];
+    return runExtraction(content);
+  }
+
+  if (name.endsWith(".txt")) {
+    const text = await extractResumeText(file);
+    return runExtraction(`Resume:\n\n${text}\n\nReturn the JSON object only.`);
+  }
+
+  throw new Error("Unsupported file type. Upload a PDF, DOCX, or TXT resume.");
 }
 
 // ---------------------------------------------------------------------------

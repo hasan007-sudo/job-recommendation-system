@@ -8,7 +8,24 @@ export async function GET(_request: Request, { params }: { params: Promise<{ job
 
   const job = await prisma.job.findUnique({
     where: { id: jobId },
-    include: { company: true },
+    select: {
+      id: true,
+      jobTitle: true,
+      experienceMinYears: true,
+      experienceMaxYears: true,
+      location: true,
+      workMode: true,
+      educationRequirement: true,
+      requiredSkills: true,
+      roleSummary: true,
+      sourceUrl: true,
+      fullJobDescription: true,
+      roundScreening: true,
+      roundBehavioural: true,
+      roundTechnical: true,
+      roundCultureFit: true,
+      company: { select: { name: true } },
+    },
   });
   if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
 
