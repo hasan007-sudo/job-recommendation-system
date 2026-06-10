@@ -61,9 +61,8 @@ model Job {
   salaryInrMaxPerYear Int?
 
   // 512-dim vector from Bedrock Titan Text Embeddings V2 over a composite of title+roleType+summary+skills.
-  // Queried via $queryRaw; HNSW index lives in prisma/db-init.sql.
+  // Queried via $queryRaw; the HNSW index DDL lives in prisma/migrations/0_init.
   embedding Unsupported("vector(512)")?
-
   sourceRowHash   String    @unique
   loadedAt        DateTime?
   sourceUpdatedAt DateTime?
@@ -72,4 +71,7 @@ model Job {
 
   @@index([companyId])
   @@index([experienceMinYears, experienceMaxYears])
+  // HNSW cosine ANN index; real DDL (USING hnsw + vector_cosine_ops) lives in
+  // prisma/migrations/0_init. Declared here so Prisma Migrate doesn't drop it.
+  @@index([embedding], map: "job_embedding_hnsw")
 }

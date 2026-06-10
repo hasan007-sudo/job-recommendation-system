@@ -5,7 +5,9 @@
     "dev": "next dev",
     "build": "next build",
     "postinstall": "prisma generate",
-    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:status": "prisma migrate status",
     "db:import": "tsx prisma/import-jobs.ts",
     "test": "vitest run",
     "test:watch": "vitest"

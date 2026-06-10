@@ -9,7 +9,9 @@ npm run dev          # start Next.js dev server
 npm run build        # production build
 npm run test         # run all tests once (vitest)
 npm run test:watch   # vitest in watch mode
-npm run db:push      # push Prisma schema to database
+npm run db:migrate   # create + apply a migration from schema changes (prisma migrate dev)
+npm run db:deploy    # apply pending migrations (prisma migrate deploy)
+npm run db:status    # show migration status
 npm run db:import    # import/re-embed jobs from source (tsx prisma/import-jobs.ts)
 ```
 
@@ -33,7 +35,7 @@ To run a single test file: `npx vitest run lib/__tests__/search.ranking.test.ts`
 - `/` — legacy job search page (plain CSS, left untouched unless asked)
 - `/onboarding` — new candidate onboarding flow (governed by the design system below)
 
-**Data layer:** PostgreSQL (Amazon Aurora) via Prisma with `pgvector` and `pg_trgm` extensions. Schema has two models: `Company` and `Job`. `Job.embedding` is a `vector(512)` column — 512-dim normalized vectors from AWS Bedrock Titan Text Embeddings V2, computed at import time over a composite of `title + roleType + summary + skills`. The HNSW index for ANN lookups is defined in `prisma/db-init.sql`, not in the schema file.
+**Data layer:** PostgreSQL (Amazon Aurora) via Prisma with `pgvector` and `pg_trgm` extensions. Schema has two models: `Company` and `Job`. `Job.embedding` is a `vector(512)` column — 512-dim normalized vectors from AWS Bedrock Titan Text Embeddings V2, computed at import time over a composite of `title + roleType + summary + skills`. Schema changes flow through Prisma migrations (`prisma/migrations/`); the baseline `0_init` migration holds the SQL Prisma can't express — the HNSW index DDL, the trigram GIN indexes, and the `dedup_key` generated column. When `prisma migrate dev` generates a new migration touching these, review it with `--create-only` first.
 
 **Search (`lib/search.ts`):** Resolves `{ companyText, roleText, skillNames, experienceYears, projectTexts, sort }` to a `JobCard[]`. The model has three parts:
 1. **Candidate set** — union of role-matched ∪ company-matched ∪ skill-matched jobs. Title matching is a 3-tier union: exact → trigram (`pg_trgm`) → vector (ANN). Company matching is exact → trigram. Experience is the one hard filter.

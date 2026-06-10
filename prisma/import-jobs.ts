@@ -44,7 +44,7 @@ function norm(value: string | null): string {
   return (value ?? "").trim().toLowerCase();
 }
 
-// Winner per (company, title): richest JD → freshest → most skills → stable hash.
+// Winner per row hash: richest JD → freshest → most skills → stable hash.
 function isBetter(candidate: JobRow, current: JobRow): boolean {
   const a = candidate.full_job_description?.length ?? 0;
   const b = current.full_job_description?.length ?? 0;
@@ -83,11 +83,12 @@ async function main() {
     WHERE job_title IS NOT NULL AND company_name IS NOT NULL
   `);
 
-  // Dedup by (company, lower title): keep the richest row.
+  // Dedup by source row hash (same-title roles at one company are distinct jobs);
+  // rows without a hash fall back to (company, lower title). Keep the richest row.
   const winners = new Map<string, JobRow>();
   for (const row of rows) {
     if (!norm(row.company_name) || !norm(row.job_title)) continue;
-    const key = `${norm(row.company_name)}|${norm(row.job_title)}`;
+    const key = row.row_hash ?? `${norm(row.company_name)}:${norm(row.job_title)}`;
     const current = winners.get(key);
     if (!current || isBetter(row, current)) winners.set(key, row);
   }

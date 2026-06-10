@@ -25,6 +25,7 @@ const bodySchema = z.object({
   questions: z.array(z.string().min(1)).min(1),
   candidateName: z.string().trim().min(1).optional(),
   jobTitle: z.string().optional(),
+  userDetails: z.string().trim().min(1).optional(),
 });
 
 export async function POST(request: Request) {
@@ -45,7 +46,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const { jobId, roundSlug, roundTitle, questions, candidateName, jobTitle } = parsed;
+  const { jobId, roundSlug, roundTitle, questions, candidateName, jobTitle, userDetails } =
+    parsed;
   const currentRound = ROUND_TO_CURRENT[roundSlug] ?? roundSlug;
 
   const roomName = buildInterviewRoomName(jobId);
@@ -61,6 +63,7 @@ export async function POST(request: Request) {
     session_id: roomName,
     interaction_mode: "auto",
     questions,
+    user_details: userDetails ?? "",
     config: { voice: "ishita" },
     prompt_context: {
       agent_name: "Sara",

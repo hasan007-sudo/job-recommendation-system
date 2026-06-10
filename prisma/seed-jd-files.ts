@@ -174,6 +174,86 @@ const SEED_JOBS: SeedJob[] = [
     salaryInrMaxPerYear: null,
     sourceRowHash: "seed:changepond:practice-leader",
   },
+  {
+    company: "Tiger Analytics",
+    jobTitle: "Business Analyst",
+    roleCategory: "Analytics & Consulting",
+    roleType: "Analytics Consulting",
+    location: "Chennai",
+    workMode: null,
+    requiredSkills:
+      "SQL; Tableau; Power BI; R; Python; SAS; Data visualization; Business communication",
+    educationRequirement: "BE/BTech; MBA preferred",
+    roleSummary:
+      "Entry-level Business Analyst executing data preparation, exploratory analysis and client-ready visualizations in a fast-paced analytics-consulting team.",
+    keyResponsibilities:
+      "Execute (in code) data preparation instructions from the project lead; Conduct data checks and univariate/bivariate exploratory analysis; Create charts/graphs in a visualization tool per specifications; Produce client-ready deliverables with minimal reviews; Proactively escalate delays; Adhere to task timelines.",
+    fullJobDescription:
+      "Tiger Analytics — Analytics Consulting (Business Analyst), Chennai. Tiger Analytics is a global leader in AI and analytics serving Fortune 1000 companies. Typical day: execute data preparation instructions in code; conduct data checks and univariate/bivariate analysis; perform initial exploratory analysis; create charts/graphs in a data visualization tool with guidance; produce client-ready deliverables with minimal reviews; proactively escalate delays; adhere to timelines. Expectations: hands-on intermediate to advanced SQL; impactful data visualizations in Tableau and/or Power BI; good to have basic-intermediate R/Python/SAS; effective 1:1 business communication; BE/BTech only, MBA from a reputed college preferred.",
+    roundScreening: "Analytics fundamentals; SQL basics; Business communication",
+    roundBehavioural: "Ownership & accountability; Proactive escalation; Adherence to timelines",
+    roundTechnical:
+      "Intermediate–advanced SQL; Data visualization in Tableau/Power BI; Exploratory data analysis; R/Python/SAS programming",
+    roundCultureFit: "Client-ready delivery; Collaborative teamwork; Growth mindset",
+    experienceMinYears: null,
+    experienceMaxYears: null,
+    salaryInrMinPerYear: null,
+    salaryInrMaxPerYear: null,
+    sourceRowHash: "seed:tiger-analytics:consulting-business-analyst",
+  },
+  {
+    company: "Tiger Analytics",
+    jobTitle: "Data Science Analyst",
+    roleCategory: "Data Science & Machine Learning",
+    roleType: "Trainee Analyst",
+    location: "Chennai",
+    workMode: null,
+    requiredSkills: "Python; C; C++; Machine learning; Data analytics; Communication",
+    educationRequirement: "BE/BTech in CS/IT/Circuit; No active backlogs",
+    roleSummary:
+      "Trainee analyst working on cutting-edge data analytics and machine learning problems across industries, translating business problems into technical requirements.",
+    keyResponsibilities:
+      "Engage with clients to understand their business context; Translate business problems and technical constraints into technical requirements for the desired analytics solutions.",
+    fullJobDescription:
+      "Tiger Analytics — Data Science (Trainee - Analyst), Chennai. Tiger Analytics is a global leader in AI and analytics serving Fortune 1000 companies. As a Trainee - Analyst you work on a broad range of cutting-edge data analytics and machine learning problems across a variety of industries: engage with clients to understand their business context; translate business problems and technical constraints into technical requirements for the desired analytics solutions. Expectations: proficient in programming (Python/C/C++); strong verbal and written communication; BE/B.Tech from a CS/IT/Circuit stream is mandatory; no active backlogs.",
+    roundScreening: "Programming fundamentals; Analytical aptitude; Communication",
+    roundBehavioural: "Client engagement; Problem framing; Eagerness to learn",
+    roundTechnical:
+      "Python/C/C++ programming; Data analytics; Machine learning foundations; Translating business problems to technical requirements",
+    roundCultureFit: "Collaboration; Adaptability across industries; Growth mindset",
+    experienceMinYears: null,
+    experienceMaxYears: null,
+    salaryInrMinPerYear: null,
+    salaryInrMaxPerYear: null,
+    sourceRowHash: "seed:tiger-analytics:data-science-analyst",
+  },
+  {
+    company: "Tiger Analytics",
+    jobTitle: "Data Engineering Analyst",
+    roleCategory: "Data Engineering",
+    roleType: "Data Engineering",
+    location: "Chennai",
+    workMode: null,
+    requiredSkills:
+      "Hadoop; HDFS; Hive; Sqoop; Kafka; Spark; Scala; Python; Java; NoSQL; HBase; Cassandra; MongoDB; AWS; Azure; ETL; Data warehousing",
+    educationRequirement: null,
+    roleSummary:
+      "Trainee analyst building scalable data ingestion and processing pipelines across the Hadoop/Spark big-data ecosystem.",
+    keyResponsibilities:
+      "Build scalable data ingestion pipelines for real-time streams, CDC events and batch data; High-performance processing of structured and unstructured data and data harmonization; Schedule, orchestrate and validate pipelines; Exception handling and log monitoring for debugging; Collaborate with consultants, data scientists, engineers and application developers to develop analytics solutions.",
+    fullJobDescription:
+      "Tiger Analytics — Engineering (Trainee - Analyst), Chennai/Hyderabad/Bangalore. Tiger Analytics is a global leader in AI and analytics serving Fortune 1000 companies. As a Trainee - Analyst you work on cutting-edge data analytics and machine learning problems: build scalable data ingestion pipelines for real-time streams, CDC events and batch data; high-performance data processing for structured and unstructured data and data harmonization; scheduling, orchestrating and validating pipelines; exception handling and log monitoring for debugging; collaborate cross-functionally to develop analytics solutions. Desired skills: data warehousing concepts, distributed systems, data pipelines, ETL; scalable Hadoop cluster environments; Hadoop ecosystem (HDFS, Hive, Sqoop, Kafka, ELK Stack); Spark, Scala, Python, core/advanced Java; NoSQL (HBase, Cassandra, MongoDB); AWS or Azure big-data components; good to know Databricks, Snowflake.",
+    roundScreening: "Data warehousing concepts; Programming fundamentals; SQL basics",
+    roundBehavioural: "Cross-team collaboration; Debugging mindset; Pipeline ownership",
+    roundTechnical:
+      "Hadoop ecosystem (HDFS, Hive, Sqoop, Kafka); Spark, Scala, Python, Java; NoSQL (HBase, Cassandra, MongoDB); AWS/Azure big-data components; ETL & pipeline orchestration",
+    roundCultureFit: "Cross-functional collaboration; Reliability & monitoring; Continuous learning (Databricks, Snowflake)",
+    experienceMinYears: null,
+    experienceMaxYears: null,
+    salaryInrMinPerYear: null,
+    salaryInrMaxPerYear: null,
+    sourceRowHash: "seed:tiger-analytics:data-engineering-analyst",
+  },
 ];
 
 // Same composite as import-jobs.ts: title + roleType + summary + skills.

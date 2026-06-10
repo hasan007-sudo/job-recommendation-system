@@ -36,6 +36,31 @@ const ROUND_MINUTES: Record<string, number> = {
   culture_fit: 10,
 };
 
+// One-sentence candidate summary passed to the interview agent (name, degree,
+// experience, target role + company) so it can personalize the greeting.
+function buildUserDetails(
+  profile: OnboardingProfile | null,
+  job: JobDetail["job"],
+): string | undefined {
+  if (!profile) return undefined;
+
+  const name = profile.name.trim() || "The candidate";
+
+  const degree = profile.education.degree.trim();
+  const major = profile.education.major.trim();
+  const degreePhrase = degree ? `a ${degree}${major ? ` in ${major}` : ""}` : "";
+
+  const experiencePhrase =
+    profile.experienceYears > 0
+      ? `${profile.experienceYears} year${profile.experienceYears === 1 ? "" : "s"} of experience`
+      : "a fresher";
+
+  const targetPhrase = `the ${job.jobTitle} role at ${job.companyName}`;
+
+  const facts = [degreePhrase, experiencePhrase].filter(Boolean).join(", ");
+  return `${name}${facts ? ` has ${facts}, and` : ""} is interviewing for ${targetPhrase}.`;
+}
+
 export default function JobDetailPage({ params }: { params: Promise<{ jobId: string }> }) {
   const { jobId } = use(params);
   const router = useRouter();
@@ -250,6 +275,7 @@ function RoundItem({
         questions,
         candidateName: profile?.name,
         jobTitle: job.jobTitle,
+        userDetails: buildUserDetails(profile, job),
       });
       if (result.error || !result.participant_token || !result.server_url) {
         throw new Error(result.error ?? "Failed to start interview.");

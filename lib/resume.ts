@@ -27,11 +27,18 @@ type OcrPlugin = { id: "file-parser"; pdf: { engine: string } };
 // TXT only — DOCX has its own extractor (it also needs images), PDF skips text.
 export async function extractResumeText(file: File): Promise<string> {
   if (!file.name.toLowerCase().endsWith(".txt")) {
-    throw new Error("Unsupported file type. Upload a PDF, DOCX, or TXT resume.");
+    throw new Error(
+      "Unsupported file type. Upload a PDF, DOCX, or TXT resume.",
+    );
   }
-  const text = (await file.text()).replace(/\s+/g, " ").trim().slice(0, MAX_RESUME_CHARS);
+  const text = (await file.text())
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_RESUME_CHARS);
   if (text.length < 100) {
-    throw new Error("Could not read enough text from this file. Try a different resume.");
+    throw new Error(
+      "Could not read enough text from this file. Try a different resume.",
+    );
   }
   return text;
 }
@@ -39,7 +46,9 @@ export async function extractResumeText(file: File): Promise<string> {
 // DOCX → text (mammoth) + embedded images. Images are harvested via a custom
 // convertImage handler during convertToHtml; the HTML output is discarded — we
 // only collect the binaries so text baked into a pasted screenshot is not lost.
-async function extractDocx(file: File): Promise<{ text: string; images: ImagePart[] }> {
+async function extractDocx(
+  file: File,
+): Promise<{ text: string; images: ImagePart[] }> {
   const buffer = Buffer.from(await file.arrayBuffer());
 
   const images: ImagePart[] = [];
@@ -65,7 +74,9 @@ async function extractDocx(file: File): Promise<{ text: string; images: ImagePar
 
   // A DOCX with neither readable text nor images is unusable.
   if (text.length < 100 && images.length === 0) {
-    throw new Error("Could not read enough text from this file. Try a different resume.");
+    throw new Error(
+      "Could not read enough text from this file. Try a different resume.",
+    );
   }
   return { text, images };
 }
@@ -100,6 +111,7 @@ Rules:
 - "work_experience" is ONLY actual job-related work: paid employment (full-time, part-time, contract) or internships at a real company or organization. Each entry must be a role the candidate was employed for. Internships count here.
 - "projects" is ONLY side-projects, personal projects, academic/course projects, hackathon work, and open-source contributions. These are NOT employment.
 - Never put a project in "work_experience" and never put a job in "projects". If something has no employing company (e.g. a personal app, a GitHub repo, a college project), it is a project, not work experience.
+- FALLBACK: If the resume contains NO standalone projects at all (no side, personal, academic, hackathon, or open-source projects anywhere), derive 2-4 "projects" entries from the most significant initiatives described in the work experience instead — each a distinct system, feature, or migration the candidate built or led (e.g. a real-time gateway, a platform migration, a data pipeline). Use the initiative as "name", a one-sentence summary of what was built and its impact as "description", and 3-8 keywords. Keep "work_experience" as the normal company/role entries only. Apply this fallback ONLY when "projects" would otherwise be empty.
 - "project keywords" must be domain skills or tech concepts only (e.g. "real-time systems", "WebSocket", "distributed caching"). Exclude soft skills, team size, awards, and process words.
 - "cgpa" is ONLY a numeric grade. Accept formats like "8.44", "3.7", "9.2/10", "72%", or grade classes like "First Class". Reject and set to null anything that describes how the degree was taken or its honours level — for example "Dist." / "Distance" / "Distance Education", "Regular", "Part-time" / "Full-time", "Online" / "Correspondence", "Hons." / "Honours". If the resume shows e.g. "B.E. (Dist.)" with no numeric grade, set cgpa to null and leave the "(Dist.)" out of every field (it is not a score, not a major, not a degree suffix worth keeping).
 - Return only the JSON object.`;
@@ -115,12 +127,24 @@ const ParsedResume = z.object({
         graduation_year: z.number().nullish(),
         cgpa: z.union([z.string(), z.number()]).nullish(),
         is_current: z.boolean().nullish(),
-      })
+      }),
     )
     .default([]),
   skills: z.array(z.string()).default([]),
-  projects: z.array(z.object({ name: z.string().nullish(), description: z.string().nullish(), keywords: z.array(z.string()).default([]) })).default([]),
-  work_experience: z.array(z.object({ company: z.string().nullish(), role: z.string().nullish() })).default([]),
+  projects: z
+    .array(
+      z.object({
+        name: z.string().nullish(),
+        description: z.string().nullish(),
+        keywords: z.array(z.string()).default([]),
+      }),
+    )
+    .default([]),
+  work_experience: z
+    .array(
+      z.object({ company: z.string().nullish(), role: z.string().nullish() }),
+    )
+    .default([]),
   experience_years: z.number().nullish(),
   strongest_domain: z.string().nullish(),
 });
@@ -129,7 +153,10 @@ type ParsedResume = z.infer<typeof ParsedResume>;
 // Shared LLM call: takes the already-built user content (a plain string, or
 // content parts for PDF/DOCX) and an optional plugin (PDF OCR), returns the
 // mapped profile. All file types funnel through here.
-async function runExtraction(userContent: UserContent, plugin?: OcrPlugin): Promise<OnboardingProfile> {
+async function runExtraction(
+  userContent: UserContent,
+  plugin?: OcrPlugin,
+): Promise<OnboardingProfile> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error("OPENROUTER_API_KEY is not set.");
@@ -161,7 +188,10 @@ async function runExtraction(userContent: UserContent, plugin?: OcrPlugin): Prom
 
   const data = await res.json();
   const content: string = data?.choices?.[0]?.message?.content ?? "";
-  const json = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const json = content
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
 
   let raw: unknown;
   try {
@@ -183,17 +213,25 @@ export async function parseResume(file: File): Promise<OnboardingProfile> {
     // parses the document (including image-only content) before the model sees it.
     const dataUri = await fileToDataUri(file, "application/pdf");
     const content: ContentPart[] = [
-      { type: "text", text: "Resume document attached. Return the JSON object only." },
+      {
+        type: "text",
+        text: "Resume document attached. Return the JSON object only.",
+      },
       { type: "file", file: { filename: file.name, file_data: dataUri } },
     ];
-    return runExtraction(content, { id: "file-parser", pdf: { engine: "mistral-ocr" } });
+    return runExtraction(content, {
+      id: "file-parser",
+      pdf: { engine: "mistral-ocr" },
+    });
   }
 
   if (name.endsWith(".docx")) {
     const { text, images } = await extractDocx(file);
     if (images.length === 0) {
       // No images → plain text path, no vision needed.
-      return runExtraction(`Resume:\n\n${text}\n\nReturn the JSON object only.`);
+      return runExtraction(
+        `Resume:\n\n${text}\n\nReturn the JSON object only.`,
+      );
     }
     const content: ContentPart[] = [
       {
@@ -221,7 +259,9 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
   const edu = parsed.education[0];
   const projects = parsed.projects
     .filter((p) => p.name)
-    .map((p) => (p.description ? `${p.name} · ${p.description}` : (p.name as string)));
+    .map((p) =>
+      p.description ? `${p.name} · ${p.description}` : (p.name as string),
+    );
   const work = parsed.work_experience
     .filter((w) => w.role || w.company)
     .map((w) => [w.role, w.company].filter(Boolean).join(" · "));
@@ -239,7 +279,11 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
     projects,
     projectKeywords: parsed.projects.map((p) => p.keywords ?? []),
     experience: work,
-    scores: { cgpa: edu?.cgpa != null ? String(edu.cgpa) : "", twelfth: "", tenth: "" },
+    scores: {
+      cgpa: edu?.cgpa != null ? String(edu.cgpa) : "",
+      twelfth: "",
+      tenth: "",
+    },
     roleHint: parsed.strongest_domain ?? parsed.work_experience[0]?.role ?? "",
     experienceYears: Math.max(0, Math.round(parsed.experience_years ?? 0)),
     resumeText: buildResumeText(parsed),
@@ -247,11 +291,14 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
 }
 
 function buildResumeText(parsed: ParsedResume): string {
-  const roleHint = parsed.strongest_domain ?? parsed.work_experience[0]?.role ?? "";
+  const roleHint =
+    parsed.strongest_domain ?? parsed.work_experience[0]?.role ?? "";
   const skills = dedupe(parsed.skills.map((s) => s.trim()).filter(Boolean));
   const projects = parsed.projects
     .filter((p) => p.name)
-    .map((p) => (p.description ? `${p.name}: ${p.description}` : (p.name as string)));
+    .map((p) =>
+      p.description ? `${p.name}: ${p.description}` : (p.name as string),
+    );
   const work = parsed.work_experience
     .filter((w) => w.role || w.company)
     .map((w) => [w.role, w.company].filter(Boolean).join(" at "));
