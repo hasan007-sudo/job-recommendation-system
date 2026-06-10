@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink, Loader2, Phone, Sparkles } from "lucide-react";
 import type { Round } from "../../../lib/rounds";
-import type { OnboardingProfile } from "../../../lib/onboarding";
+import { deriveSearchInput, type OnboardingProfile } from "../../../lib/onboarding";
 import { formatExperience, matchPill, initials } from "../../../lib/display";
 import { getJson, postJson } from "../../../lib/api";
 import { InterviewSession } from "../../../components/ui/InterviewSession";
@@ -64,7 +64,6 @@ function buildUserDetails(
 export default function JobDetailPage({ params }: { params: Promise<{ jobId: string }> }) {
   const { jobId } = use(params);
   const router = useRouter();
-  const [matchPercent, setMatchPercent] = useState<number | undefined>(undefined);
   const [profile, setProfile] = useState<OnboardingProfile | null>(null);
 
   const { data: detail, error: queryError } = useQuery({
@@ -73,14 +72,23 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
   });
   const error = queryError instanceof Error ? queryError.message : "";
 
+  // Match % is profile-relative, so it's computed server-side from the candidate's
+  // skills + projects. The page reads its own profile and asks the job API — no
+  // dependency on the search list or shared score state.
+  const { data: matchData } = useQuery({
+    queryKey: ["job-match", jobId, profile?.skills, profile?.projectKeywords],
+    enabled: !!profile,
+    queryFn: () => {
+      const { skillNames, projectTexts } = deriveSearchInput(profile!);
+      return postJson<{ match?: { score: number | null } }>(
+        `/api/jobs/${jobId}/match`,
+        { skillNames, projectTexts },
+      );
+    },
+  });
+  const matchPercent = matchData?.match?.score ?? undefined;
+
   useEffect(() => {
-    try {
-      const cards = JSON.parse(sessionStorage.getItem("rounds:cards") ?? "[]");
-      const cached = cards.find((c: { jobId: string }) => c.jobId === jobId);
-      if (typeof cached?.score === "number") setMatchPercent(cached.score);
-    } catch {
-      // no cached score — leave the badge empty
-    }
     try {
       const raw = sessionStorage.getItem("rounds:profile");
       if (raw) setProfile(JSON.parse(raw));
@@ -119,7 +127,9 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
           </div>
         )}
 
-        {detail && <JobDetailView detail={detail} matchPercent={matchPercent} profile={profile} />}
+        {detail && (
+          <JobDetailView detail={detail} matchPercent={matchPercent} profile={profile} />
+        )}
       </div>
     </main>
   );

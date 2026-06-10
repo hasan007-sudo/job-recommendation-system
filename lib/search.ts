@@ -337,3 +337,98 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
     };
   });
 }
+
+export type JobMatch = {
+  score: number | null;
+  skillsPct: number | null;
+  projectsPct: number | null;
+  matchedSkills: number | null;
+  totalSkills: number;
+};
+
+// Match % for a single job against a candidate's skills + projects, using the
+// exact skills%/projects%/blend formula as searchJobs (the `sub`/`scored` CTEs)
+// but scoped to one job. Lets the job detail page show its own match badge
+// without depending on the search list. Returns null if the job doesn't exist.
+export async function scoreJobMatch(
+  jobId: string,
+  input: { skillNames: string[]; projectTexts?: string[] },
+): Promise<JobMatch | null> {
+  const skills = input.skillNames.map((s) => s.trim()).filter(Boolean);
+  const normalizedSkills = skills
+    .map((s) => s.toLowerCase().replace(/[^a-z0-9]/g, ""))
+    .filter(Boolean);
+  const hasSkills = skills.length > 0;
+
+  const projectTexts = (input.projectTexts ?? []).map((t) => t.trim()).filter(Boolean);
+  const hasProjVecs = projectTexts.length > 0;
+  const projVecLits: string[] = hasProjVecs
+    ? await Promise.all(projectTexts.map((t) => embed(t).then(toPgVectorLiteral)))
+    : [];
+
+  const rows = await prisma.$queryRaw<
+    {
+      matched: number | null;
+      required: number;
+      skillsPct: number | null;
+      projectsPct: number | null;
+      score: number | null;
+    }[]
+  >`
+    WITH raw AS (
+      SELECT
+        CASE WHEN ${hasSkills} THEN cov.matched ELSE NULL END AS matched,
+        cov.required AS required,
+        CASE WHEN ${hasProjVecs} AND j.embedding IS NOT NULL
+             THEN (
+               SELECT MAX((1 - (j.embedding <=> pv::vector))::float)
+               FROM unnest(${projVecLits}::text[]) AS pv
+             )
+             ELSE NULL END AS "projSim"
+      FROM "Job" j
+      CROSS JOIN LATERAL (
+        SELECT
+          COUNT(*) FILTER (WHERE EXISTS (
+            SELECT 1 FROM unnest(${normalizedSkills}::text[]) nsk
+            WHERE ntok LIKE '%' || nsk || '%'
+          ))::int AS matched,
+          COUNT(*)::int AS required
+        FROM (
+          SELECT regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g') AS ntok
+          FROM regexp_split_to_table(COALESCE(j."requiredSkills", ''), '[,;|]') AS tok
+          WHERE length(regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g')) > 0
+        ) tokens
+      ) cov
+      WHERE j.id = ${jobId}
+    ),
+    sub AS (
+      SELECT raw.*,
+        CASE WHEN ${hasSkills} AND required > 0
+             THEN round(matched::numeric / required * 100)::int END AS "skillsPct",
+        CASE WHEN ${hasProjVecs} AND "projSim" IS NOT NULL
+             THEN round((greatest(0, least(1, ("projSim" - ${MIN_PROJECT_SIMILARITY}) / ${1.0 - MIN_PROJECT_SIMILARITY})) * 100)::numeric)::int
+             ELSE NULL
+        END AS "projectsPct"
+      FROM raw
+    )
+    SELECT
+      matched, required, "skillsPct", "projectsPct",
+      CASE
+        WHEN "skillsPct" IS NULL AND "projectsPct" IS NULL THEN NULL
+        WHEN "skillsPct" IS NULL THEN "projectsPct"
+        WHEN "projectsPct" IS NULL THEN "skillsPct"
+        ELSE round((("skillsPct" + "projectsPct") / 2.0)::numeric)::int
+      END AS score
+    FROM sub
+  `;
+
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    score: row.score,
+    skillsPct: row.skillsPct,
+    projectsPct: row.projectsPct,
+    matchedSkills: row.matched,
+    totalSkills: row.required,
+  };
+}

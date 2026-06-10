@@ -78,7 +78,6 @@ export default function HomePage() {
     onSuccess: (data, input) => {
       const newCards: JobCard[] = data.cards ?? [];
       setCards(newCards);
-      sessionStorage.setItem("rounds:cards", JSON.stringify(newCards));
       sessionStorage.setItem(
         "rounds:filters",
         JSON.stringify({
@@ -163,15 +162,6 @@ export default function HomePage() {
       }
     } else if (profileSkills?.length) {
       setSkillNames(profileSkills);
-    }
-
-    const cachedCards = sessionStorage.getItem("rounds:cards");
-    if (cachedCards) {
-      try {
-        setCards(JSON.parse(cachedCards));
-      } catch {
-        // ignore
-      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -376,9 +366,11 @@ export default function HomePage() {
           <section>
             <div className="mb-5 flex items-end justify-between">
               <h2 className="text-[13px] font-bold uppercase tracking-[0.18em] text-slate-500">
-                {cards === null
-                  ? "Run a search"
-                  : `${matchCount} MATCHING ROLES`}
+                {loading
+                  ? "Searching jobs…"
+                  : cards === null
+                    ? "Run a search"
+                    : `${matchCount} MATCHING ROLES`}
               </h2>
               {cards && cards.length > 0 && (
                 <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-0.5">
