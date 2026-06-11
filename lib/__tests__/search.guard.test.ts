@@ -28,7 +28,7 @@ describe("empty-query guard", () => {
     const result = await searchJobs({
       companyText: "",
       roleText: "",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -48,7 +48,7 @@ describe("empty-query guard", () => {
     const result = await searchJobs({
       companyText: "",
       roleText: "Nonexistent Role XYZ",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -57,13 +57,13 @@ describe("empty-query guard", () => {
     expect(mockQuery()).toHaveBeenCalledTimes(3);
   });
 
-  it("returns [] when skillNames contains only blank strings (stripped to empty)", async () => {
-    // After trim + filter(Boolean), skills become []. Combined with no role/company,
+  it("returns [] when skills contains only blank names (stripped to empty)", async () => {
+    // After trim + filter, skills become []. Combined with no role/company,
     // the guard fires and no queries run.
     const result = await searchJobs({
       companyText: "",
       roleText: "",
-      skillNames: ["  ", "", "\t"],
+      skills: [{ name: "  " }, { name: "" }, { name: "\t" }],
       experienceYears: null,
     });
 

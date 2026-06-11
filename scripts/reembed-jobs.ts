@@ -15,13 +15,13 @@ if (!connectionString) throw new Error("ROUND_DB_URL is required");
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
 
 // Mirror embeddingText() in prisma/import-jobs.ts, using the stored columns.
+// Role-retrieval text only — skills/capabilities have their own vectors.
 function embeddingText(j: {
   jobTitle: string;
   roleType: string | null;
   roleSummary: string | null;
-  requiredSkills: string | null;
 }): string {
-  return `${j.jobTitle}. ${j.roleType ?? ""}. ${j.roleSummary ?? ""}. Skills: ${j.requiredSkills ?? ""}`;
+  return `${j.jobTitle}. ${j.roleType ?? ""}. ${j.roleSummary ?? ""}`;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -44,7 +44,7 @@ async function main() {
   const jobId = process.argv[2];
   const jobs = await prisma.job.findMany({
     where: jobId ? { id: jobId } : undefined,
-    select: { id: true, jobTitle: true, roleType: true, roleSummary: true, requiredSkills: true },
+    select: { id: true, jobTitle: true, roleType: true, roleSummary: true },
   });
   if (jobId && jobs.length === 0) throw new Error(`No job found with id ${jobId}`);
   console.log(`Re-embedding ${jobs.length} job(s)...`);

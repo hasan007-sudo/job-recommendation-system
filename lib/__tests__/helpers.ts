@@ -5,9 +5,9 @@ export const FIXED_VEC = new Array(512).fill(0.1) as number[];
 export const FIXED_VEC_LIT = `[${FIXED_VEC.join(",")}]`;
 
 // Mirrors the shape that the final ranking $queryRaw returns per row
-// (see SearchRow in ../search.ts). The blend (skillsPct/projectsPct → score)
-// is computed in SQL, so mocked rows just carry whatever values the test needs;
-// searchJobs maps them through verbatim.
+// (see ScoreRow in ../search.ts). The sub-scores and 65/35 blend are computed
+// in SQL, so mocked rows just carry whatever values the test needs; searchJobs
+// maps them through verbatim (roleOrCompanyMatched = tier < 2).
 export type SearchRowRaw = {
   jobId: string;
   jobTitle: string;
@@ -15,12 +15,12 @@ export type SearchRowRaw = {
   experienceMinYears: number | null;
   experienceMaxYears: number | null;
   focusRoundPattern: string;
-  matched: number | null;
+  covered: number;
   required: number;
   skillsPct: number | null;
   projectsPct: number | null;
   score: number | null;
-  roleOrCompanyMatched: boolean;
+  tier: number;
 };
 
 // Builds a minimal valid SearchRowRaw; override any field you care about.
@@ -32,14 +32,24 @@ export function makeRow(overrides: Partial<SearchRowRaw> = {}): SearchRowRaw {
     experienceMinYears: 2,
     experienceMaxYears: 5,
     focusRoundPattern: "Opening/Screening+Technical/Role Skills",
-    matched: 1,
+    covered: 1,
     required: 2,
     skillsPct: 50,
     projectsPct: null,
     score: 50,
-    roleOrCompanyMatched: true,
+    tier: 1,
     ...overrides,
   };
+}
+
+// Shorthand for a covered-skill catalog row (resolveCoveredSkillIds result).
+export function makeSkillId(id: string) {
+  return { id };
+}
+
+// Shorthand for a skill-path candidate row (matchSkillJobIds result).
+export function makeSkillJob(jobId: string) {
+  return { jobId };
 }
 
 // Shorthand for a title-tier match row (exact, trigram, or vector result).

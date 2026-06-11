@@ -39,7 +39,7 @@ describe("role-only search", () => {
     const result = await searchJobs({
       roleText: "Software Engineer",
       companyText: "",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -60,7 +60,7 @@ describe("role-only search", () => {
     const result = await searchJobs({
       roleText: "Softwre Enginer", // intentional typo
       companyText: "",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -80,7 +80,7 @@ describe("role-only search", () => {
     const result = await searchJobs({
       roleText: "SDE",
       companyText: "",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -100,7 +100,7 @@ describe("role-only search", () => {
     const result = await searchJobs({
       roleText: "Software Engineer",
       companyText: "",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -119,7 +119,7 @@ describe("role-only search", () => {
     await searchJobs({
       roleText: "Frontend Engineer",
       companyText: "",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 

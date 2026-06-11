@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { embed, toPgVectorLiteral } from "../lib/embeddings";
+import { backfillJobMatchData } from "../lib/job-match-backfill";
 
 type JobRow = {
   company_name: string | null;
@@ -61,8 +62,10 @@ function isBetter(candidate: JobRow, current: JobRow): boolean {
   return (candidate.row_hash ?? "") < (current.row_hash ?? "");
 }
 
+// Role-retrieval embedding only (title/roleType/summary). Skills are embedded
+// per-token in the Skill catalog; capabilities per-statement in JobCapability.
 function embeddingText(row: JobRow): string {
-  return `${row.job_title}. ${row.role_type ?? ""}. ${row.role_summary ?? ""}. Skills: ${row.required_skills ?? ""}`;
+  return `${row.job_title}. ${row.role_type ?? ""}. ${row.role_summary ?? ""}`;
 }
 
 async function main() {
@@ -181,9 +184,16 @@ async function main() {
     if (++done % 100 === 0) console.log(`  embedded ${done}/${pending.length}`);
   }
 
+  // 4. Match-scoring data — Skill catalog (gloss + embed new tokens only),
+  //    JobSkill links, JobCapability rows. Resumable; skips populated jobs.
+  const match = await backfillJobMatchData(target, { log: console.log });
+
   await source.$disconnect();
   await target.$disconnect();
-  console.log(`Imported ${jobData.length} jobs across ${companyNames.length} companies. Embedded ${done}.`);
+  console.log(
+    `Imported ${jobData.length} jobs across ${companyNames.length} companies. Embedded ${done}. ` +
+      `Match data: +${match.newSkills} skills, ${match.jobSkillLinks} links, ${match.capabilities} capabilities.`,
+  );
 }
 
 main().catch(async (error) => {

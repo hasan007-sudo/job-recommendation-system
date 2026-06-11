@@ -1,28 +1,35 @@
 // Group 6 — Combined inputs
 // Tests role+company, role+skills, role+experience, and all-four together.
 //
-// When BOTH roleText and companyText are provided, matchTitle and matchCompanyIds
-// run in parallel (Promise.all). Their $queryRaw calls interleave in this
-// deterministic order (due to JavaScript's microtask FIFO execution):
+// With skills present, covered-skill resolution runs first (CALL 1), then the
+// retrieval paths run in parallel (Promise.all) and their $queryRaw calls
+// interleave in deterministic microtask-FIFO order:
 //
-//   CALL 1 → title exact        (matchTitle starts first in Promise.all)
-//   CALL 2 → company exact      (matchCompanyIds starts second)
-//   CALL 3 → title trigram
-//   CALL 4 → title vector ANN   (if company exact matched; otherwise company trigram is CALL 4)
-//   LAST   → final ranking SQL
+// role+company (no skills):
+//   CALL 1 → title exact        CALL 2 → company exact
+//   CALL 3 → title trigram      CALL 4 → title vector ANN
+//   LAST   → final scoring SQL
 //
-// For role+skills or role+experience (no companyText):
-//   CALL 1 → title exact
-//   CALL 2 → title trigram
-//   CALL 3 → title vector
-//   CALL 4 → final ranking SQL
+// role+skills (no company):
+//   CALL 1 → covered-skill resolution
+//   CALL 2 → title exact        CALL 3 → skill-path candidates
+//   CALL 4 → title trigram      CALL 5 → title vector ANN
+//   LAST   → final scoring SQL
 
 import { describe, it, expect, beforeEach, type Mock } from "vitest";
 import { vi } from "vitest";
 import { searchJobs } from "../search";
 import { prisma } from "../prisma";
 import { embed, toPgVectorLiteral } from "../embeddings";
-import { FIXED_VEC, FIXED_VEC_LIT, makeRow, makeMatch, makeCompanyExact } from "./helpers";
+import {
+  FIXED_VEC,
+  FIXED_VEC_LIT,
+  makeRow,
+  makeMatch,
+  makeCompanyExact,
+  makeSkillId,
+  makeSkillJob,
+} from "./helpers";
 
 vi.mock("../prisma", () => ({ prisma: { $queryRaw: vi.fn() } }));
 vi.mock("../embeddings", () => ({ embed: vi.fn(), toPgVectorLiteral: vi.fn() }));
@@ -37,22 +44,21 @@ beforeEach(() => {
 
 describe("role + company", () => {
   it("returns jobs that matched on role or company (role/company tier)", async () => {
-    // role and company both contribute candidate ids to the UNION; the matched
-    // job is flagged roleOrCompanyMatched in SQL.
-    // Call order: title-exact, company-exact, title-trigram, title-vector, final.
+    // role and company both contribute candidate ids to the UNION; tier < 2
+    // maps to roleOrCompanyMatched.
     q()
       .mockResolvedValueOnce([makeMatch("job-1", 1.0)]) // title exact
       .mockResolvedValueOnce([makeCompanyExact("company-1")]) // company exact
       .mockResolvedValueOnce([]) // title trigram
       .mockResolvedValueOnce([]) // title vector
       .mockResolvedValueOnce([
-        makeRow({ jobId: "job-1", companyName: "Google", roleOrCompanyMatched: true }),
+        makeRow({ jobId: "job-1", companyName: "Google", tier: 0 }),
       ]); // final
 
     const result = await searchJobs({
       roleText: "Engineer",
       companyText: "Google",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -74,7 +80,7 @@ describe("role + company", () => {
     await searchJobs({
       roleText: "Engineer",
       companyText: "Acme",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -83,25 +89,25 @@ describe("role + company", () => {
 });
 
 describe("role + skills", () => {
-  it("runs 3 title tiers + final (no company) and maps skill coverage through", async () => {
-    // No company → 3 title calls + 1 final = 4 calls total. The skill coverage
-    // (matched/required, skillsPct) is computed in SQL and mapped through.
+  it("resolves covered skills, runs 3 title tiers + skill path + final, and maps coverage through", async () => {
     q()
+      .mockResolvedValueOnce([makeSkillId("skill-react")]) // covered skills
       .mockResolvedValueOnce([makeMatch("job-1", 1.0)]) // title exact
+      .mockResolvedValueOnce([makeSkillJob("job-1")]) // skill-path candidates
       .mockResolvedValueOnce([]) // title trigram
       .mockResolvedValueOnce([]) // title vector
       .mockResolvedValueOnce([
-        makeRow({ matched: 1, required: 2, skillsPct: 50, score: 50 }),
+        makeRow({ covered: 1, required: 2, skillsPct: 50, score: 33 }),
       ]); // final
 
     const result = await searchJobs({
       roleText: "Frontend Engineer",
       companyText: "",
-      skillNames: ["React"],
+      skills: [{ name: "React" }],
       experienceYears: null,
     });
 
-    expect(q()).toHaveBeenCalledTimes(4);
+    expect(q()).toHaveBeenCalledTimes(6);
     expect(result[0]!.matchedSkills).toBe(1);
     expect(result[0]!.totalSkills).toBe(2);
     expect(result[0]!.skillsPct).toBe(50);
@@ -121,7 +127,7 @@ describe("role + experience", () => {
     const result = await searchJobs({
       roleText: "Software Engineer",
       companyText: "",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -131,12 +137,14 @@ describe("role + experience", () => {
 });
 
 describe("all four inputs combined", () => {
-  it("makes 5 calls and returns a single ranked result for role+company+skills+experience", async () => {
-    // skills and experience add no extra prep queries, so the call count matches
-    // role+company: title-exact, company-exact, title-trigram, title-vector, final.
+  it("makes 7 calls and returns a single ranked result for role+company+skills+experience", async () => {
+    // covered-skills, then title-exact, company-exact, skill-path interleave,
+    // then title-trigram, title-vector, final.
     q()
+      .mockResolvedValueOnce([makeSkillId("skill-react")]) // covered skills
       .mockResolvedValueOnce([makeMatch("job-1", 1.0)]) // title exact
       .mockResolvedValueOnce([makeCompanyExact("company-1")]) // company exact
+      .mockResolvedValueOnce([makeSkillJob("job-1")]) // skill-path candidates
       .mockResolvedValueOnce([]) // title trigram
       .mockResolvedValueOnce([]) // title vector
       .mockResolvedValueOnce([makeRow({ jobId: "job-1" })]); // final
@@ -144,11 +152,11 @@ describe("all four inputs combined", () => {
     const result = await searchJobs({
       roleText: "Software Engineer",
       companyText: "Acme",
-      skillNames: ["React", "TypeScript"],
+      skills: [{ name: "React" }, { name: "TypeScript" }],
       experienceYears: 3,
     });
 
-    expect(q()).toHaveBeenCalledTimes(5);
+    expect(q()).toHaveBeenCalledTimes(7);
     expect(result).toHaveLength(1);
   });
 });

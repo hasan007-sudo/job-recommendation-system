@@ -1,35 +1,60 @@
 // Job-centric search. Experience stays a hard filter, and the candidate set is
-// the UNION of role-matched ∪ company-matched ∪ skill-matched jobs.
-// Every candidate gets a tier: 0 = company-matched, 1 = role-matched,
-// 2 = skill-only. The match % is an equal blend of two sub-scores, computed in
-// SQL so the LIMIT is a correct top-N by match %:
-//   • skills%   — job's required-skill tokens covered by the user's skills (ILIKE).
-//   • projects% — project↔job embedding cosine similarity (rescaled to [0–100]).
-// "default" (Best match): company tier first (always shown, even at 0% match),
-// then role, then skill — the role/skill tiers each guaranteed up to
-// MIN_SLOTS_PER_TIER slots before backfilling toward MAX_RESULTS by score.
-// "score" (Match score): pure top-N by blended score, tier ignored.
+// the UNION of company ∪ role ∪ skill ∪ project(capability) matched jobs. Every
+// candidate gets a preference tier (0 company, 1 role, 2 personalized) which
+// orders the result groups; the match % never includes preference.
+//
+//   matchScore = 65% requiredSkillScore + 35% projectEvidenceScore
+//
+//   • requiredSkillScore — % of the job's required skills covered by the
+//     candidate. Coverage is resolved ONCE per search against the deduped
+//     Skill catalog (exact normalized token OR gloss-embedding cosine ≥
+//     SEMANTIC_SKILL_MIN); per-job scoring is then set membership over the
+//     indexed JobSkill join — no per-job vector math.
+//   • projectEvidenceScore — AVG over the job's capabilities of the best
+//     project↔capability cosine, rescaled through the evidence window.
+//
+// Retrieval is bounded on every path: title ANN top-20, skill path top
+// MAX_SKILL_CANDIDATES by coverage ratio, capability ANN top
+// MAX_CAPABILITY_MATCHES per project vector.
 // Rounds are parsed at read time from focusRoundPattern.
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { embed, toPgVectorLiteral } from "./embeddings";
+import { glossSkills, normalizeSkillToken } from "./glosses";
 import { parseRounds } from "./rounds";
 import type { JobCard, Seniority } from "./types";
 
 const MIN_TITLE_TRIGRAM_SIMILARITY = 0.3;
 const MIN_COMPANY_TRIGRAM_SIMILARITY = 0.4;
 const MAX_TITLE_MATCHES_PER_TIER = 20;
-// We retrieve exactly what we display — no oversized candidate pool. The blended
-// score is computed in SQL so the LIMIT is a correct top-N by match %.
 const MAX_RESULTS = 30;
-// "Best match" guarantees the role and skill tiers at least this many slots each
-// before the other backfills toward MAX_RESULTS. (Company tier is shown in full,
-// ahead of both, so this floor does not apply to it.)
-const MIN_SLOTS_PER_TIER = 15;
-// Cosine similarity floor for project↔job matching. Titan embeddings have a
-// background similarity of ~0.10–0.20 even for unrelated texts; anything below
-// this is noise. Raise to tighten relevance, lower to widen it.
-const MIN_PROJECT_SIMILARITY = 0.4;
+
+// Blend weights (fixed): skills carry the score, projects support it.
+const SKILL_WEIGHT = 0.65;
+const PROJECT_WEIGHT = 0.35;
+
+// Gloss-embedding cosine floor for a candidate skill to cover a job skill.
+// Calibrated on glossed Titan pairs: signal 0.33–0.62, noise 0.00–0.15
+// (see docs/ARCHITECTURE.md). Validate with scripts/probe-similarity.ts.
+const SEMANTIC_SKILL_MIN = 0.3;
+
+// Project↔capability evidence window: cosine below MIN counts as zero evidence,
+// MIN..MAX rescales linearly to 0–100. Measured noise 0.04–0.10, signal 0.13+.
+const PROJECT_EVIDENCE_MIN = 0.1;
+const PROJECT_EVIDENCE_MAX = 0.35;
+
+// Bounded retrieval: a common covered skill ("python") could match tens of
+// thousands of jobs, so the skill path shortlists by coverage ratio. The
+// capability path is ANN top-K per project vector (mirrors the title tier cap).
+const MAX_SKILL_CANDIDATES = 1000;
+const MAX_CAPABILITY_MATCHES = 50;
+
+// Default-sort slot reservation: Tier 0 (selected company) is hard-capped;
+// Tier 1 (requested role) gets min(TIER1_RESERVE, available) reserved slots,
+// extras compete in backfill by matchScore.
+const TIER0_CAP = 10;
+const TIER1_RESERVE = 10;
 
 function normalize(text: string): string {
   return text
@@ -118,87 +143,298 @@ async function matchCompanyIds(text: string): Promise<string[]> {
 
 export type SortMode = "default" | "score";
 
+// One candidate skill. The gloss (one-line description from the resume parser)
+// is the embedding input for semantic coverage; skills without one — manually
+// typed or from pre-gloss profiles — match by exact normalized token only
+// (bare-token embeddings are too noisy to trust).
+export type SkillQuery = { name: string; gloss?: string | null };
+
 export type SearchInput = {
   companyText: string;
   roleText: string;
-  skillNames: string[];
+  skills: SkillQuery[];
   experienceYears: number | null;
-  // Per-project keyword strings (LLM-extracted). Each entry is one project's
-  // domain skills joined as a phrase. projectsPct = MAX cosine across entries.
+  // Per-project evidence strings (description + keywords). Each is embedded and
+  // compared against JobCapability vectors.
   projectTexts?: string[];
-  // "default" tiers role/company matches first; "score" ranks purely by blend.
+  // "default" tiers company/role matches first; "score" ranks purely by matchScore.
   sort?: SortMode;
 };
 
-type SearchRow = {
+type ScoreRow = {
   jobId: string;
   jobTitle: string;
   companyName: string;
   experienceMinYears: number | null;
   experienceMaxYears: number | null;
   focusRoundPattern: string;
-  matched: number | null;
+  covered: number;
   required: number;
   skillsPct: number | null;
   projectsPct: number | null;
   score: number | null;
-  roleOrCompanyMatched: boolean;
+  tier: number;
 };
+
+// Guardrails for gloss-on-miss: a public search API can send junk strings;
+// cap what we'll gloss + store per request so the catalog can't be flooded.
+const MAX_NEW_GLOSSES_PER_REQUEST = 20;
+const MAX_SKILL_NAME_LENGTH = 60;
+
+// Gloss-on-miss: glossless skills whose tokens the catalog has never seen get
+// glossed (one batched LLM call), embedded, and upserted into the Skill
+// catalog WITHOUT JobSkill links — link-less rows are invisible to scoring
+// denominators, so the catalog doubles as a global gloss/embedding cache.
+// First request mentioning a new skill pays the gloss+embed latency; every
+// later request (any caller) is a catalog hit. Failures degrade to exact-only
+// matching for those skills — search must not 500 because OpenRouter is down.
+async function ensureCatalogGlosses(skills: SkillQuery[]): Promise<void> {
+  const labelByToken = new Map<string, string>();
+  for (const s of skills) {
+    const name = s.name.trim();
+    if (s.gloss?.trim() || !name || name.length > MAX_SKILL_NAME_LENGTH) continue;
+    const token = normalizeSkillToken(name);
+    if (token && !labelByToken.has(token)) labelByToken.set(token, name);
+  }
+  if (labelByToken.size === 0) return;
+
+  try {
+    const existing = await prisma.skill.findMany({
+      where: { token: { in: [...labelByToken.keys()] } },
+      select: { token: true },
+    });
+    for (const e of existing) labelByToken.delete(e.token);
+
+    const entries = [...labelByToken.entries()].slice(0, MAX_NEW_GLOSSES_PER_REQUEST);
+    if (entries.length === 0) return;
+
+    const glosses = await glossSkills(entries.map(([, label]) => label));
+    for (const [token, label] of entries) {
+      const gloss = glosses.get(label) ?? label;
+      const vec = toPgVectorLiteral(await embed(gloss));
+      // Upsert: token is unique, so a concurrent request creating the same
+      // skill is safe — the loser reuses the winner's row.
+      await prisma.skill.upsert({
+        where: { token },
+        create: { token, label, gloss },
+        update: {},
+      });
+      await prisma.$executeRawUnsafe(
+        `UPDATE "Skill" SET embedding = $1::vector WHERE token = $2 AND embedding IS NULL`,
+        vec,
+        token,
+      );
+    }
+  } catch (err) {
+    console.warn("gloss-on-miss failed; affected skills match exact-only:", err);
+  }
+}
+
+// Resolve which catalog skills the candidate covers. A catalog skill is
+// covered when any of:
+//   1. exact — its token equals a candidate token;
+//   2. gloss semantic — its embedding is ≥ SEMANTIC_SKILL_MIN close to a
+//      candidate skill's gloss embedding (resume-parsed skills carry a gloss);
+//   3. catalog-fallback semantic — for candidate skills WITHOUT a gloss
+//      (manually typed chips, pre-gloss profiles): if the typed token exists
+//      in the catalog, that row's stored gloss embedding stands in as the
+//      query vector (self-join). Free — no LLM or Bedrock call.
+// We never embed a bare skill name: bare-token vectors are too noisy to
+// threshold (see docs/ARCHITECTURE.md). Catalog-sized work, independent of
+// job count; per-job coverage afterwards is set membership.
+async function resolveCoveredSkillIds(skills: SkillQuery[]): Promise<string[]> {
+  const tokens = skills
+    .map((s) => normalizeSkillToken(s.name))
+    .filter(Boolean);
+  if (tokens.length === 0) return [];
+
+  // Gloss + cache catalog-new glossless skills first, so the catalog-fallback
+  // branch below can pick them up in the same request.
+  await ensureCatalogGlosses(skills);
+
+  const glosses = [...new Set(skills.map((s) => s.gloss?.trim()).filter((g): g is string => Boolean(g)))];
+  const vecLits = await Promise.all(glosses.map((g) => embed(g).then(toPgVectorLiteral)));
+  const hasVecs = vecLits.length > 0;
+
+  const glosslessTokens = skills
+    .filter((s) => !s.gloss?.trim())
+    .map((s) => normalizeSkillToken(s.name))
+    .filter(Boolean);
+
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT s.id FROM "Skill" s
+    WHERE s.token = ANY(${tokens}::text[])
+       OR (
+         ${hasVecs} AND s.embedding IS NOT NULL AND EXISTS (
+           SELECT 1 FROM unnest(${vecLits}::text[]) v
+           WHERE (1 - (s.embedding <=> v::vector)) >= ${SEMANTIC_SKILL_MIN}
+         )
+       )
+       OR (
+         cardinality(${glosslessTokens}::text[]) > 0 AND s.embedding IS NOT NULL AND EXISTS (
+           SELECT 1 FROM "Skill" t
+           WHERE t.token = ANY(${glosslessTokens}::text[])
+             AND t.embedding IS NOT NULL
+             AND (1 - (s.embedding <=> t.embedding)) >= ${SEMANTIC_SKILL_MIN}
+         )
+       )
+  `;
+  return rows.map((r) => r.id);
+}
+
+// Bounded skill-path retrieval: top MAX_SKILL_CANDIDATES jobs having ≥1 covered
+// skill, ordered by coverage ratio. The aggregation-before-LIMIT is intentional —
+// without it the cap would keep arbitrary low-coverage jobs.
+async function matchSkillJobIds(
+  coveredSkillIds: string[],
+  experienceYears: number | null,
+): Promise<string[]> {
+  if (coveredSkillIds.length === 0) return [];
+  const rows = await prisma.$queryRaw<{ jobId: string }[]>`
+    SELECT js."jobId"
+    FROM "JobSkill" js
+    JOIN "Job" j ON j.id = js."jobId"
+    WHERE ${experienceYears}::int IS NULL
+       OR ${experienceYears}::int BETWEEN COALESCE(j."experienceMinYears", 0)
+                                      AND COALESCE(j."experienceMaxYears", 99)
+    GROUP BY js."jobId"
+    HAVING COUNT(*) FILTER (WHERE js."skillId" = ANY(${coveredSkillIds}::text[])) > 0
+    ORDER BY COUNT(*) FILTER (WHERE js."skillId" = ANY(${coveredSkillIds}::text[]))::float / COUNT(*) DESC
+    LIMIT ${MAX_SKILL_CANDIDATES}
+  `;
+  return rows.map((r) => r.jobId);
+}
+
+// Bounded project-path retrieval: ANN top-K capabilities per project vector
+// (HNSW), unioned and deduped to job ids.
+async function matchProjectJobIds(projVecLits: string[]): Promise<string[]> {
+  const ids = new Set<string>();
+  for (const vec of projVecLits) {
+    const rows = await prisma.$queryRaw<{ jobId: string }[]>`
+      SELECT DISTINCT "jobId" FROM (
+        SELECT "jobId" FROM "JobCapability"
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> ${vec}::vector
+        LIMIT ${MAX_CAPABILITY_MATCHES}
+      ) nearest
+    `;
+    rows.forEach((r) => ids.add(r.jobId));
+  }
+  return [...ids];
+}
+
+// Shared scoring fragment: requiredSkillScore via JobSkill set membership,
+// projectEvidenceScore via AVG of per-capability best project cosine rescaled
+// through the evidence window. Used by both searchJobs and scoreJobMatch so the
+// list and the job page can never disagree.
+function scoringLaterals(coveredSkillIds: string[], projVecLits: string[]) {
+  const hasProjVecs = projVecLits.length > 0;
+  return Prisma.sql`
+    -- Lateral 1: "cov" — required-skill coverage for job j.
+    -- Pure set membership against the pre-resolved coveredSkillIds — no
+    -- vector math here. LEFT join: a job with no JobSkill rows still
+    -- produces a row (required = 0) instead of dropping out of results.
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*)::int AS required,                                               -- job's total required skills
+        COUNT(*) FILTER (WHERE js."skillId" = ANY(${coveredSkillIds}::text[]))::int AS covered  -- how many the candidate covers
+      FROM "JobSkill" js
+      WHERE js."jobId" = j.id
+    ) cov ON true
+    -- Lateral 2: "pe" — project evidence for job j.
+    -- Per capability: best = MAX cosine across the candidate's project
+    -- vectors (the capability is evidenced by the MOST relevant project).
+    -- Then rescale each best through the evidence window (MIN → 0, MAX → 100)
+    -- and AVG across the job's capabilities (a project must cover the role's
+    -- breadth, not just one line). LEFT join: no embedded capabilities or no
+    -- project vectors → evidence NULL, job still returned.
+    LEFT JOIN LATERAL (
+      SELECT AVG(
+        GREATEST(0, LEAST(1,
+          (cap.best - ${PROJECT_EVIDENCE_MIN}) / ${PROJECT_EVIDENCE_MAX - PROJECT_EVIDENCE_MIN}  -- rescale window 0.10–0.35 → 0–1
+        )) * 100
+      )::float AS evidence
+      FROM (
+        SELECT (
+          SELECT MAX((1 - (jc.embedding <=> pv::vector))::float)                 -- <=> is cosine distance; 1 - d = similarity
+          FROM unnest(${projVecLits}::text[]) pv
+        ) AS best
+        FROM "JobCapability" jc
+        WHERE ${hasProjVecs} AND jc."jobId" = j.id AND jc.embedding IS NOT NULL
+      ) cap
+    ) pe ON true
+  `;
+}
+
+// Sub-scores + blend, computed from the lateral outputs. Both sub-scores are
+// 0–100 (missing evidence scores 0 — fixed 65/35 weights, per ARCHITECTURE.md).
+// Only when the candidate supplied neither skills nor projects is the score
+// null (nothing to measure → badge shows "—").
+function scoreProjection(hasSkills: boolean, hasProjVecs: boolean) {
+  return Prisma.sql`
+    CASE WHEN ${hasSkills} AND cov.required > 0
+         THEN round(cov.covered::numeric / cov.required * 100)::int
+         WHEN ${hasSkills} THEN 0
+         ELSE NULL END AS "skillsPct",
+    CASE WHEN ${hasProjVecs}
+         THEN COALESCE(round(pe.evidence::numeric)::int, 0)
+         ELSE NULL END AS "projectsPct",
+    CASE WHEN NOT ${hasSkills} AND NOT ${hasProjVecs} THEN NULL
+         ELSE round(
+           ${SKILL_WEIGHT} * (CASE WHEN ${hasSkills} AND cov.required > 0
+                                   THEN cov.covered::numeric / cov.required * 100
+                                   ELSE 0 END)
+           + ${PROJECT_WEIGHT} * COALESCE(
+               CASE WHEN ${hasProjVecs} THEN pe.evidence ELSE 0 END, 0)
+         )::int END AS score
+  `;
+}
 
 export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
   const sort = input.sort ?? "default";
+  const skills = input.skills.filter((s) => s.name.trim());
   const projectTexts = (input.projectTexts ?? [])
     .map((t) => t.trim())
     .filter(Boolean);
-  console.log({ projectTexts });
-
-  const [titleIds, companyIds] = await Promise.all([
-    input.roleText
-      ? matchTitleIds(input.roleText)
-      : Promise.resolve([] as string[]),
-    input.companyText
-      ? matchCompanyIds(input.companyText)
-      : Promise.resolve([] as string[]),
-  ]);
-
-  const skills = input.skillNames.map((s) => s.trim()).filter(Boolean);
-  // Pre-normalize to the same [a-z0-9] form the SQL applies to each job skill
-  // token, so the LIKE compares apples-to-apples. Done once here instead of per
-  // (token × skill) inside the lateral.
-  const normalizedSkills = skills
-    .map((s) => s.toLowerCase().replace(/[^a-z0-9]/g, ""))
-    .filter(Boolean);
+  const hasSkills = skills.length > 0;
+  const hasProjVecs = projectTexts.length > 0;
 
   // Nothing to constrain on → don't dump the whole table.
-  if (titleIds.length === 0 && companyIds.length === 0 && skills.length === 0) {
+  if (!input.roleText && !input.companyText && !hasSkills && !hasProjVecs) {
     return [];
   }
 
-  const hasSkills = skills.length > 0;
+  const projVecLits = await Promise.all(
+    projectTexts.map((t) => embed(t).then(toPgVectorLiteral)),
+  );
 
-  // Embed each project's keyword string separately. projSim in SQL will be the
-  // MAX cosine across all project vectors — job scored against its best match.
-  const hasProjVecs = projectTexts.length > 0;
-  const projVecLits: string[] = hasProjVecs
-    ? await Promise.all(
-        projectTexts.map((t) => embed(t).then(toPgVectorLiteral)),
-      )
-    : [];
+  const coveredSkillIds = await resolveCoveredSkillIds(skills);
 
-  // Candidate set = role-matched ∪ company-matched ∪ skill-matched (experience
-  // stays a hard filter). Sub-scores, the blend, the per-tier floor, and the
-  // final order/limit are all computed here so a 30-row LIMIT is correct top-N.
-  //   raw    → counts + raw cosine + tier (0 company, 1 role, 2 skill)
-  //   sub    → skills% / projects% (cosine rescaled to [0–100])
-  //   scored → blended score = mean of the non-null sub-scores
-  //   ranked → row number within each tier (for the Best-match floor)
-  //   pick   → select MAX_RESULTS rows (default: company tier in full, then
-  //            floor-15 of role/skill, then backfill by score; score: pure top-N),
-  //            then display company→role→skill for default.
-  const rows = await prisma.$queryRaw<SearchRow[]>`
-    -- 1) raw — the UNION candidate set: every job matching role, company, or skills
-    --    (and passing the experience hard filter), carrying raw counts (matched /
-    --    required), raw cosine similarity, and tier flag.
+  const [titleIds, companyIds, skillJobIds, projectJobIds] = await Promise.all([
+    input.roleText ? matchTitleIds(input.roleText) : Promise.resolve([] as string[]),
+    input.companyText ? matchCompanyIds(input.companyText) : Promise.resolve([] as string[]),
+    matchSkillJobIds(coveredSkillIds, input.experienceYears),
+    matchProjectJobIds(projVecLits),
+  ]);
+
+  if (
+    titleIds.length === 0 &&
+    companyIds.length === 0 &&
+    skillJobIds.length === 0 &&
+    projectJobIds.length === 0
+  ) {
+    return [];
+  }
+
+  // Candidate set = union of the four paths (experience hard-filtered), scored
+  // and tier-tagged in one query so the LIMIT is a correct top-N.
+  //   raw    → union + laterals (coverage, project evidence) + sub-scores +
+  //            the 65/35 blend + tier
+  //   ranked → row number within tier (for the cap/reservation)
+  //   pick   → default: Tier 0 hard-capped at TIER0_CAP, Tier 1 reserves
+  //            min(TIER1_RESERVE, available), rest backfills by score;
+  //            score: global top-N by matchScore.
+  const rows = await prisma.$queryRaw<ScoreRow[]>`
     WITH raw AS (
       SELECT
         j.id AS "jobId",
@@ -208,16 +444,9 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
         j."experienceMaxYears",
         j."focusRoundPattern",
         j."createdAt",
-        CASE WHEN ${hasSkills} THEN cov.matched ELSE NULL END AS matched,
-        cov.required AS required,
-        CASE WHEN ${hasProjVecs} AND j.embedding IS NOT NULL
-             THEN (
-               SELECT MAX((1 - (j.embedding <=> pv::vector))::float)
-               FROM unnest(${projVecLits}::text[]) AS pv
-             )
-             ELSE NULL END AS "projSim",
-        -- Tier: 0 company-matched (absolute top), 1 role-matched, 2 skill-only.
-        -- Company wins over role so a company's off-role jobs surface first.
+        COALESCE(cov.covered, 0) AS covered,
+        COALESCE(cov.required, 0) AS required,
+        ${scoreProjection(hasSkills, hasProjVecs)},
         CASE
           WHEN cardinality(${companyIds}::text[]) > 0 AND j."companyId" = ANY(${companyIds}::text[]) THEN 0
           WHEN cardinality(${titleIds}::text[]) > 0 AND j.id = ANY(${titleIds}::text[]) THEN 1
@@ -225,92 +454,45 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
         END AS tier
       FROM "Job" j
       JOIN "Company" c ON c.id = j."companyId"
-      -- Per job: count its skill tokens, how many a user skill covers, and how many
-      -- appear in the project text. Counting job tokens keeps matched ≤ required.
-      CROSS JOIN LATERAL (
-        SELECT
-          COUNT(*) FILTER (WHERE EXISTS (
-            SELECT 1 FROM unnest(${normalizedSkills}::text[]) nsk
-            WHERE ntok LIKE '%' || nsk || '%'
-          ))::int AS matched,
-          COUNT(*)::int AS required
-        FROM (
-          SELECT regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g') AS ntok
-          FROM regexp_split_to_table(COALESCE(j."requiredSkills", ''), '[,;|]') AS tok
-          WHERE length(regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g')) > 0
-        ) tokens
-      ) cov
+      ${scoringLaterals(coveredSkillIds, projVecLits)}
       WHERE (
           ${input.experienceYears}::int IS NULL
           OR ${input.experienceYears}::int BETWEEN COALESCE(j."experienceMinYears", 0)
                                                AND COALESCE(j."experienceMaxYears", 99)
         )
         AND (
-          (cardinality(${titleIds}::text[]) > 0 AND j.id = ANY(${titleIds}::text[]))
-          OR (cardinality(${companyIds}::text[]) > 0 AND j."companyId" = ANY(${companyIds}::text[]))
-          OR cov.matched > 0
+          (cardinality(${companyIds}::text[]) > 0 AND j."companyId" = ANY(${companyIds}::text[]))
+          OR (cardinality(${titleIds}::text[]) > 0 AND j.id = ANY(${titleIds}::text[]))
+          OR (cardinality(${skillJobIds}::text[]) > 0 AND j.id = ANY(${skillJobIds}::text[]))
+          OR (cardinality(${projectJobIds}::text[]) > 0 AND j.id = ANY(${projectJobIds}::text[]))
         )
     ),
-    -- 2) sub — per-job sub-scores derived from raw counts (both in [0,100]):
-    --      skillsPct   = % of the job's required skills you list
-    --      projectsPct = project↔job embedding cosine rescaled to [0,100]
-    sub AS (
-      SELECT raw.*,
-        CASE WHEN ${hasSkills} AND required > 0
-             THEN round(matched::numeric / required * 100)::int END AS "skillsPct",
-        CASE WHEN ${hasProjVecs} AND "projSim" IS NOT NULL
-             THEN round((greatest(0, least(1, ("projSim" - ${MIN_PROJECT_SIMILARITY}) / ${1.0 - MIN_PROJECT_SIMILARITY})) * 100)::numeric)::int
-             ELSE NULL
-        END AS "projectsPct"
-      FROM raw
-    ),
-    -- 3) scored — the blended match %: equal mean of whichever sub-scores exist
-    --    (one null → use the other; both null → null, badge shows "—").
-    scored AS (
-      SELECT sub.*,
-        CASE
-          WHEN "skillsPct" IS NULL AND "projectsPct" IS NULL THEN NULL
-          WHEN "skillsPct" IS NULL THEN "projectsPct"
-          WHEN "projectsPct" IS NULL THEN "skillsPct"
-          ELSE round((("skillsPct" + "projectsPct") / 2.0)::numeric)::int
-        END AS score
-      FROM sub
-    ),
-    -- 4) ranked — number each job within its tier (company / role / skill),
-    --    best score first. rn_in_tier ≤ MIN_SLOTS_PER_TIER is the Best-match floor.
     ranked AS (
-      SELECT scored.*,
+      SELECT raw.*,
         ROW_NUMBER() OVER (
           PARTITION BY tier
           ORDER BY score DESC NULLS LAST, "createdAt" ASC
         ) AS rn_in_tier
-      FROM scored
+      FROM raw
     ),
-    -- 5) pick — SELECT which MAX_RESULTS rows survive. default takes every
-    --    company-matched row first (prio 0, even at 0% match), then the first
-    --    MIN_SLOTS_PER_TIER of the role/skill tiers (prio 1), then backfills by score
-    --    (prio 2); score ignores tiers → global top-N by score.
     pick AS (
       SELECT * FROM ranked
+      WHERE ${sort} != 'default' OR tier != 0 OR rn_in_tier <= ${TIER0_CAP}
       ORDER BY
         CASE WHEN ${sort} = 'default' THEN
           CASE WHEN tier = 0 THEN 0
-               WHEN rn_in_tier <= ${MIN_SLOTS_PER_TIER} THEN 1
+               WHEN tier = 1 AND rn_in_tier <= ${TIER1_RESERVE} THEN 1
                ELSE 2 END
           ELSE 0 END ASC,
         score DESC NULLS LAST,
         "createdAt" ASC
       LIMIT ${MAX_RESULTS}
     )
-    -- 6) final projection + DISPLAY order: default shows company first, then role,
-    --    then skill (each by score); score is already a pure by-score list.
-    --    roleOrCompanyMatched (tier < 2) is preserved for the card/return shape.
     SELECT
       "jobId", "jobTitle", "companyName",
       "experienceMinYears", "experienceMaxYears", "focusRoundPattern",
-      matched, required, "skillsPct", "projectsPct", score, (tier < 2) AS "roleOrCompanyMatched"
+      covered, required, "skillsPct", "projectsPct", score, tier
     FROM pick
-    -- Display: default orders by tier (company → role → skill); score is pure by-%.
     ORDER BY
       CASE WHEN ${sort} = 'default' THEN tier ELSE 0 END ASC,
       score DESC NULLS LAST,
@@ -331,8 +513,8 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
       score: row.score,
       skillsPct: row.skillsPct,
       projectsPct: row.projectsPct,
-      roleOrCompanyMatched: row.roleOrCompanyMatched,
-      matchedSkills: row.matched,
+      roleOrCompanyMatched: row.tier < 2,
+      matchedSkills: hasSkills ? row.covered : null,
       totalSkills: row.required,
     };
   });
@@ -346,80 +528,41 @@ export type JobMatch = {
   totalSkills: number;
 };
 
-// Match % for a single job against a candidate's skills + projects, using the
-// exact skills%/projects%/blend formula as searchJobs (the `sub`/`scored` CTEs)
-// but scoped to one job. Lets the job detail page show its own match badge
-// without depending on the search list. Returns null if the job doesn't exist.
+// Match score for a single job, using the exact same covered-skill resolution
+// and scoring SQL as searchJobs, scoped to one job — the job detail page and
+// the search list can never disagree. Returns null if the job doesn't exist.
 export async function scoreJobMatch(
   jobId: string,
-  input: { skillNames: string[]; projectTexts?: string[] },
+  input: { skills: SkillQuery[]; projectTexts?: string[] },
 ): Promise<JobMatch | null> {
-  const skills = input.skillNames.map((s) => s.trim()).filter(Boolean);
-  const normalizedSkills = skills
-    .map((s) => s.toLowerCase().replace(/[^a-z0-9]/g, ""))
+  const skills = input.skills.filter((s) => s.name.trim());
+  const projectTexts = (input.projectTexts ?? [])
+    .map((t) => t.trim())
     .filter(Boolean);
   const hasSkills = skills.length > 0;
-
-  const projectTexts = (input.projectTexts ?? []).map((t) => t.trim()).filter(Boolean);
   const hasProjVecs = projectTexts.length > 0;
-  const projVecLits: string[] = hasProjVecs
-    ? await Promise.all(projectTexts.map((t) => embed(t).then(toPgVectorLiteral)))
-    : [];
+
+  const projVecLits = await Promise.all(
+    projectTexts.map((t) => embed(t).then(toPgVectorLiteral)),
+  );
+  const coveredSkillIds = await resolveCoveredSkillIds(skills);
 
   const rows = await prisma.$queryRaw<
     {
-      matched: number | null;
+      covered: number;
       required: number;
       skillsPct: number | null;
       projectsPct: number | null;
       score: number | null;
     }[]
   >`
-    WITH raw AS (
-      SELECT
-        CASE WHEN ${hasSkills} THEN cov.matched ELSE NULL END AS matched,
-        cov.required AS required,
-        CASE WHEN ${hasProjVecs} AND j.embedding IS NOT NULL
-             THEN (
-               SELECT MAX((1 - (j.embedding <=> pv::vector))::float)
-               FROM unnest(${projVecLits}::text[]) AS pv
-             )
-             ELSE NULL END AS "projSim"
-      FROM "Job" j
-      CROSS JOIN LATERAL (
-        SELECT
-          COUNT(*) FILTER (WHERE EXISTS (
-            SELECT 1 FROM unnest(${normalizedSkills}::text[]) nsk
-            WHERE ntok LIKE '%' || nsk || '%'
-          ))::int AS matched,
-          COUNT(*)::int AS required
-        FROM (
-          SELECT regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g') AS ntok
-          FROM regexp_split_to_table(COALESCE(j."requiredSkills", ''), '[,;|]') AS tok
-          WHERE length(regexp_replace(lower(btrim(tok)), '[^a-z0-9]', '', 'g')) > 0
-        ) tokens
-      ) cov
-      WHERE j.id = ${jobId}
-    ),
-    sub AS (
-      SELECT raw.*,
-        CASE WHEN ${hasSkills} AND required > 0
-             THEN round(matched::numeric / required * 100)::int END AS "skillsPct",
-        CASE WHEN ${hasProjVecs} AND "projSim" IS NOT NULL
-             THEN round((greatest(0, least(1, ("projSim" - ${MIN_PROJECT_SIMILARITY}) / ${1.0 - MIN_PROJECT_SIMILARITY})) * 100)::numeric)::int
-             ELSE NULL
-        END AS "projectsPct"
-      FROM raw
-    )
     SELECT
-      matched, required, "skillsPct", "projectsPct",
-      CASE
-        WHEN "skillsPct" IS NULL AND "projectsPct" IS NULL THEN NULL
-        WHEN "skillsPct" IS NULL THEN "projectsPct"
-        WHEN "projectsPct" IS NULL THEN "skillsPct"
-        ELSE round((("skillsPct" + "projectsPct") / 2.0)::numeric)::int
-      END AS score
-    FROM sub
+      COALESCE(cov.covered, 0) AS covered,
+      COALESCE(cov.required, 0) AS required,
+      ${scoreProjection(hasSkills, hasProjVecs)}
+    FROM "Job" j
+    ${scoringLaterals(coveredSkillIds, projVecLits)}
+    WHERE j.id = ${jobId}
   `;
 
   const row = rows[0];
@@ -428,7 +571,7 @@ export async function scoreJobMatch(
     score: row.score,
     skillsPct: row.skillsPct,
     projectsPct: row.projectsPct,
-    matchedSkills: row.matched,
+    matchedSkills: hasSkills ? row.covered : null,
     totalSkills: row.required,
   };
 }

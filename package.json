@@ -9,6 +9,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:status": "prisma migrate status",
     "db:import": "tsx prisma/import-jobs.ts",
+    "db:update-rounds": "tsx scripts/update-rounds-from-excel.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -42,6 +43,7 @@
     "@types/pg": "^8.15.6",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.2",
+    "exceljs": "^4.4.0",
     "prisma": "^7.8.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

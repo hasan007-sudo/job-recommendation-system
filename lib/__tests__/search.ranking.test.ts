@@ -45,7 +45,7 @@ describe("ranking order", () => {
     const result = await searchJobs({
       roleText: "Engineer",
       companyText: "",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -65,7 +65,7 @@ describe("ranking order", () => {
     const result = await searchJobs({
       roleText: "Engineer",
       companyText: "",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -81,7 +81,7 @@ describe("ranking order", () => {
     const result = await searchJobs({
       roleText: "Engineer",
       companyText: "",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 

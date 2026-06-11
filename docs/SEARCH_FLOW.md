@@ -1,57 +1,67 @@
 # How search works
 
-Search resolves an input `{ companyText, roleText, skillNames, experienceYears, projectTexts?, sort? }` to a ranked list of **job cards** (`JobCard[]`). Each card is one real scraped job; its interview rounds are parsed at read time from the job's `focusRoundPattern`.
+Search resolves an input `{ companyText, roleText, skills[], experienceYears, projectTexts?, sort? }` to a ranked list of **job cards** (`JobCard[]`). Each card is one real scraped job; its interview rounds are parsed at read time from the job's `focusRoundPattern`.
 
 The model has three parts:
 
-1. **Candidate set (a union).** Role (title), company, and skills each *bring jobs in*. A job qualifies if it matches **any** of them. Experience is the one hard filter — out-of-band jobs are excluded. Projects only **score** candidates; they do not add new ones.
-2. **Match % (an equal blend).** Each job is scored on up to two sub-scores — **skills%** and **projects%** — averaged into one headline %. Experience is *not* scored.
-3. **Sort.** `default` ("Best match") tiers results **company → role → skill**: a searched company's jobs come first (even at 0% match), then role matches from other companies, then skill-only matches — each tier ranked internally by match %. `score` ("Match score") ignores the tier and ranks purely by match %.
+1. **Candidate set (a union of four bounded paths).** Company, role (title), skills, and projects (via job capabilities) each *bring jobs in*. A job qualifies if it matches **any** of them. Experience is the one hard filter. Every path is bounded — no path can dump the table.
+2. **Match % (a fixed 65/35 blend).** `matchScore = 0.65 × requiredSkillScore + 0.35 × projectEvidenceScore`. Preference (company/role) never changes the %.
+3. **Sort.** `default` ("Best match") tiers results **company → role → personalized** with a company cap and a role reservation; `score` ("Match score") ranks purely by matchScore.
 
 ```
-{ companyText, roleText, skillNames, experienceYears, projectTexts[], sort }
+{ companyText, roleText, skills[{name, gloss}], experienceYears, projectTexts[], sort }
         │
-        ├──────────────────┬──────────────────┬─────────────────────┐
-        ▼                  ▼                   │                     │
-┌──────────────────┐ ┌──────────────────┐     │ skillNames          │ projectTexts[]
-│ matchTitleIds    │ │ matchCompanyIds  │     │ experienceYears     │ (each embedded
-│ exact ∪ trigram  │ │ exact → trigram  │     │ passed into ranking │  separately;
-│ ∪ vector (keep   │ │ (first confident)│     │                     │  MAX cosine
-│ max) → ≤20/tier  │ │ → ≤5 company ids │     │                     │  scores only)
-└──────────────────┘ └──────────────────┘     │                     │
-        │                  │                   │                     │
-        └────────┬─────────┴───────────────────┴─────────────────────┘
+        │  STEP A — resolve covered skills (catalog-sized, independent of job count)
+        ▼
+┌────────────────────────────────────────────────────────────────────┐
+│ resolveCoveredSkillIds: Skill rows WHERE                            │
+│   token = candidate token (exact normalized)                        │
+│   OR max cosine(Skill.embedding, embed(gloss) per skill) ≥ 0.30     │
+└────────────────────────────────────────────────────────────────────┘
+        │
+        │  STEP B — four retrieval paths, in parallel, all bounded
+        ├──────────────────┬──────────────────┬──────────────────┬──────────────────┐
+        ▼                  ▼                  ▼                  ▼                  │
+┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐│
+│ matchTitleIds    │ │ matchCompanyIds  │ │ matchSkillJobIds │ │matchProjectJobIds││
+│ exact ∪ trigram  │ │ exact → trigram  │ │ ≥1 covered skill │ │ ANN top-50 over  ││
+│ ∪ vector ANN     │ │ (first confident)│ │ top 1,000 by     │ │ JobCapability    ││
+│ → ≤20 per tier   │ │ → ≤5 company ids │ │ coverage ratio   │ │ per project vec  ││
+└──────────────────┘ └──────────────────┘ └──────────────────┘ └──────────────────┘
+        │                  │                  │                  │
+        └────────┬─────────┴──────────────────┴──────────────────┘
                  ▼
-   ┌────────────────────────────────────────────────────────┐
-   │ Guard: no titles AND no companies AND no skills → []    │
-   └────────────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────────────┐
+   │ Guard: all four paths empty → []                              │
+   └──────────────────────────────────────────────────────────────┘
                  ▼
-   ┌────────────────────────────────────────────────────────┐
-   │ Single SQL over "Job" JOIN "Company" (CTE pipeline):    │
-   │   WHERE experience-band (hard filter)                   │
-   │     AND ( job ∈ titleIds                                │
-   │       OR  company ∈ companyIds                          │
-   │       OR  skill coverage > 0 )             ← UNION       │
-   │   skillsPct = coverage·100                              │
-   │   projectsPct = MAX cosine(projVecLits[], job.embedding)│
-   │               rescaled (MIN_PROJECT_SIMILARITY=0.40)   │
-   │   score = mean(non-null [skillsPct, projectsPct])       │
-   │   tier = 0 company · 1 role · 2 skill                   │
-   │   rn_in_tier = ROW_NUMBER() per tier                    │
-   │   ── default: company tier in full, then floor 15 of    │
-   │      role/skill, then backfill by score                 │
-   │   ── score:   pure top-N by score                       │
-   │   LIMIT 30  (MAX_RESULTS)                               │
-   └────────────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────────────┐
+   │ STEP C — one SQL over the union (CTE pipeline):               │
+   │   WHERE experience-band (hard filter) AND (∈ any path)        │
+   │   requiredSkillScore = covered JobSkill ids / required × 100  │
+   │                        (set membership — no per-job vectors)  │
+   │   projectEvidence    = AVG over the job's capabilities of     │
+   │                        MAX cosine(capability, project vecs)   │
+   │                        rescaled through window 0.10–0.35      │
+   │   matchScore = round(0.65·skills + 0.35·projects)             │
+   │   tier = 0 company · 1 role · 2 personalized                  │
+   │   ── default: tier 0 capped at 10 · tier 1 reserves           │
+   │      min(10, available) · rest backfills by matchScore        │
+   │   ── score:   pure top-N by matchScore                        │
+   │   LIMIT 30  (MAX_RESULTS)                                     │
+   └──────────────────────────────────────────────────────────────┘
                  ▼
-   ┌────────────────────────────────────────────────────────┐
-   │ JS: thin map row → JobCard, parseRounds (no re-sort)    │
-   └────────────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────────────┐
+   │ JS: thin map row → JobCard, parseRounds (no re-sort)          │
+   └──────────────────────────────────────────────────────────────┘
                  ▼
             JobCard[]
 ```
 
-All matchers live in [`lib/search.ts`](../lib/search.ts).
+All matchers and scoring live in [`lib/search.ts`](../lib/search.ts).
+`scoreJobMatch(jobId, input)` reuses the same covered-skill resolution and the
+same scoring SQL fragments scoped to one job — the job detail page's badge and
+the search list can never disagree.
 
 ---
 
@@ -62,204 +72,127 @@ model Company { id, name @unique, jobs Job[] }
 
 model Job {
   id, companyId
-  jobTitle, requiredSkills?, roleSummary?, roleType?, ...
-  focusRoundPattern   // "Opening/Screening + Technical/Role Skills + Final/Culture Fit"
+  jobTitle, requiredSkills?, roleSummary?, roleType?, keyResponsibilities?, roundTechnical?, ...
+  focusRoundPattern
   experienceMinYears?, experienceMaxYears?
-  embedding vector(512)?   // composite title+roleType+summary+skills, queried via $queryRaw
+  embedding vector(512)?      // ROLE retrieval only: title + roleType + roleSummary
+  skills        JobSkill[]
+  capabilities  JobCapability[]
+}
+
+model Skill {                 // deduped catalog: one row per distinct token
+  token @unique               // normalized; '+'/'#' kept so C / C++ / C# stay distinct
+  label, gloss                // gloss = LLM one-liner; THE embedding input
+  embedding vector(512)?
+}
+
+model JobSkill { jobId, skillId }          // thin join, no vector
+
+model JobCapability {                       // one responsibility statement per row
+  jobId, text
+  embedding vector(512)?                    // from keyResponsibilities ∪ roleSummary ∪ roundTechnical
 }
 ```
 
-Rounds are **not stored as rows**. `focusRoundPattern` is a `+`-separated string; [`parseRounds()`](../lib/rounds.ts) splits it into an ordered list at read time against a closed 7-segment vocabulary (unknown segments fall back to `Other`). `roundCount` on a card is just that list's length.
+Why glosses and why the catalog is deduped: see
+[`ARCHITECTURE.md`](./ARCHITECTURE.md). Field-by-field import rules:
+[`IMPORTING_JOBS.md`](./IMPORTING_JOBS.md). Rounds are still parsed at read
+time from `focusRoundPattern` by [`parseRounds()`](../lib/rounds.ts).
 
 ---
 
-## Layer 1: normalize
+## Step A — covered-skill resolution
 
-```ts
-function normalize(text: string): string {
-  return text.trim().toLowerCase().replace(/[^a-z0-9\s+#./-]/g, "");
-}
-```
-
-- Lowercases, trims, strips punctuation that isn't meaningful in tech names. We keep `+`, `#`, `.`, `/`, `-` so `C++`, `C#`, `Next.js`, `CI/CD` survive.
-- The normalized string feeds the exact lookup and the embedder. The trigram operator gets the **raw** text because `pg_trgm` is case-insensitive anyway.
-
----
-
-## Title matching — `matchTitleIds(roleText)`
-
-Runs **all three tiers and unions their ids** into a `Set`. A generic query like `"Software Engineer"` should surface both the exact title and related real titles, so we union the tiers rather than stopping at the first hit. Each tier is capped at `MAX_TITLE_MATCHES_PER_TIER = 20`. Title only decides **membership** (it never ranks the final list — the blended match % does), so each tier selects **ids only**; the per-tier similarity stays in `ORDER BY` purely to pick the top 20.
-
-**Tier 1 — exact:**
-```sql
-SELECT id FROM "Job" WHERE lower("jobTitle") = $norm LIMIT 20
-```
-
-**Tier 2 — trigram** (floor `MIN_TITLE_TRIGRAM_SIMILARITY = 0.3`):
-```sql
-SELECT id FROM "Job"
-WHERE "jobTitle" % $text AND similarity("jobTitle", $text) >= 0.3
-ORDER BY similarity("jobTitle", $text) DESC LIMIT 20
-```
-
-**Tier 3 — vector** (top 20 nearest by cosine):
-```sql
-SELECT id FROM "Job"
-WHERE embedding IS NOT NULL ORDER BY embedding <=> $vec::vector LIMIT 20
-```
-
-> The vector tier has **no similarity floor of its own** — it always returns the 20 nearest. Returns the unioned ids (`titleIds`); the similarity/cosine only orders each tier's `LIMIT`, it is never returned or scored. Empty `roleText` → `[]`.
-
-### How trigrams work
-```
-"Google"  → {"  G"," Go","Goo","oog","ogl","gle","le "}
-"googl"   → {"  g"," go","goo","oog","ogl","gl "}
-shared {"goo","oog","ogl"} → similarity ≈ 0.5
-```
-The GIN trigram index (`job_title_trgm`) makes `WHERE "jobTitle" % $text` an index lookup (~3ms) instead of a seq scan. Catches typos (`"engneer"`), variants, and partials (`"front"` → `Frontend Engineer`). Misses strings with no shared 3-grams (`"SDE"` ↔ `"Software Engineer"`) — that's what the vector tier is for.
-
-### The embedding model
-[`lib/embeddings.ts`](../lib/embeddings.ts) uses `amazon.titan-embed-text-v2:0` via the AWS Bedrock API:
-- 512-dim, normalized (cosine-ready unit vectors)
-- Requires `AWS_REGION` env var; credentials resolve from the standard AWS chain
-- Query embeddings are wrapped in an LRU cache (`max: 500`) keyed on the lowercased text, so a repeated role/project string is embedded once then served from memory.
-
-Job embeddings are computed at import time over a **composite** of the posting, not the title alone (see [`prisma/import-jobs.ts`](../prisma/import-jobs.ts)):
-```ts
-`${job_title}. ${role_type}. ${role_summary}. Skills: ${required_skills}`
-```
-
----
-
-## Company matching — `matchCompanyIds(companyText)`
-
-Company names are typed near-exact (proper nouns), so this matcher is a simple **exact → trigram waterfall with no vector tier**, returning at most **5** company ids:
-
-```ts
-// Tier 1: exact — return immediately if found
-SELECT id FROM "Company" WHERE lower(name) = $norm LIMIT 5;
-
-// Tier 2: trigram — accept only if top score clears the floor
-SELECT id, similarity(name, $text) AS score FROM "Company"
-WHERE name % $text ORDER BY score DESC LIMIT 5;
-// keep only if score[0] >= MIN_COMPANY_TRIGRAM_SIMILARITY (0.4)
-```
-
-`MIN_COMPANY_TRIGRAM_SIMILARITY = 0.4` is strict because company names are short and false positives are costly. A miss returns `[]`.
-
----
-
-## The empty-result guard
-
-```ts
-if (titleMatches.length === 0 && companyIds.length === 0 && skills.length === 0) return [];
-```
-
-If nothing was typed (or nothing matched), search returns an empty list instead of dumping the whole `Job` table. At least one of title / company / skills must produce a constraint.
-
----
-
-## Final query — union, blend, floor/backfill (one CTE pipeline)
-
-One `$queryRaw` over `Job JOIN Company`. The experience band is a hard filter; everything else is **OR-ed into a union**. The sub-scores, the blend, the per-tier floor, and the final order/limit are **all in SQL** — so a 30-row `LIMIT` is a correct top-N by match % (the JS side is just a row→card mapper).
+The candidate's skills arrive as `{ name, gloss }` pairs (the resume parser
+generates the gloss in the same LLM call that extracts the skill; manually
+typed skills have no gloss). Coverage is resolved **once per search** against
+the `Skill` catalog:
 
 ```sql
-WITH raw AS (          -- union candidate set + raw counts/cosine + tier flag
-  SELECT j.*, c.name,
-    CASE WHEN $hasSkills THEN cov.matched ELSE NULL END               AS matched,
-    cov.required,
-    CASE WHEN $hasProjVecs AND j.embedding IS NOT NULL
-         THEN (SELECT MAX((1 - (j.embedding <=> pv::vector))::float)
-               FROM unnest($projVecLits::text[]) AS pv)
-         ELSE NULL END                                                AS "projSim",
-    CASE WHEN company ∈ companyIds THEN 0                             -- tier:
-         WHEN job ∈ titleIds       THEN 1                             --  0 company
-         ELSE 2 END                                          AS tier  --  1 role / 2 skill
-  FROM "Job" j JOIN "Company" c ON c.id = j."companyId"
-  CROSS JOIN LATERAL ( -- over j.requiredSkills split on , ; |
-    --   matched  = job skill tokens covered by any input skill  (ILIKE substring)
-    --   required = count of non-empty job skill tokens
-  ) cov
-  WHERE ( $experienceYears IS NULL
-          OR $experienceYears BETWEEN COALESCE(min,0) AND COALESCE(max,99) )  -- hard filter
-    AND ( job ∈ titleIds OR company ∈ companyIds
-       OR cov.matched > 0 )                                                    -- UNION
-),
-sub AS (    SELECT *, skillsPct, projectsPct FROM raw ),     -- see Scoring below
-scored AS ( SELECT *, score = mean(non-null [skillsPct, projectsPct]) FROM sub ),
-ranked AS ( SELECT *,
-              ROW_NUMBER() OVER (PARTITION BY tier
-                                 ORDER BY score DESC NULLS LAST, "createdAt") AS rn_in_tier
-            FROM scored ),
-pick AS (   SELECT * FROM ranked          -- SELECTION (which 30)
-            ORDER BY CASE WHEN $sort='default' THEN              -- company first,
-                       CASE WHEN tier = 0 THEN 0                 -- then floor 15 of
-                            WHEN rn_in_tier <= 15 THEN 1         -- role/skill, then
-                            ELSE 2 END                           -- backfill by score
-                       ELSE 0 END,
-                     score DESC NULLS LAST, "createdAt"
-            LIMIT 30 )                                                        -- MAX_RESULTS
-SELECT *, (tier < 2) AS "roleOrCompanyMatched"  -- DISPLAY order
-FROM pick
-ORDER BY CASE WHEN $sort='default' THEN tier ELSE 0 END,
-         score DESC NULLS LAST, "createdAt";
+SELECT id FROM "Skill"
+WHERE token = ANY($candidateTokens)                            -- exact normalized
+   OR (embedding IS NOT NULL AND EXISTS (
+        SELECT 1 FROM unnest($glossVecs) v
+        WHERE (1 - (embedding <=> v::vector)) >= 0.30))        -- SEMANTIC_SKILL_MIN
 ```
 
-### Candidate set (which jobs qualify) — a union, not an AND
-A job enters the set if it matches **any** signal:
+- Exact matching always wins; semantic extends it, never replaces it.
+- Skills without a gloss (manually typed chips, pre-gloss profiles, external
+  API callers) get **catalog-fallback semantics**: if the token exists in the
+  `Skill` catalog, that row's stored gloss embedding stands in as the query
+  vector (a SQL self-join — zero extra LLM/Bedrock calls).
+- Tokens the catalog has never seen trigger **gloss-on-miss**: one batched LLM
+  call glosses them, they're embedded and upserted into the catalog *without*
+  `JobSkill` links (link-less rows are invisible to scoring denominators — the
+  catalog doubles as a global gloss cache). First request pays ~1–2s; every
+  later request from any caller is a catalog hit. Guardrails: ≤20 new glosses
+  per request, skill names ≤60 chars; on LLM failure those skills degrade to
+  exact-only instead of failing the search.
+- We never embed a bare skill name — bare-token embeddings are too noisy to
+  trust (measured: `c++↔python` 0.26 vs `aws↔cloud computing` 0.23; glossed:
+  noise ≤0.15, signal ≥0.33).
+- Embedding/LLM work happens only when the search or match API is called
+  (the "Update results" click / post-onboarding autosearch) — never per
+  keystroke; chip autocomplete is purely client-side.
+- This is catalog-sized work (~10³–10⁴ rows), independent of job count. After
+  it, per-job scoring is **set membership** over the indexed `JobSkill` join —
+  no per-job vector math for skills, which is what lets this scale to millions
+  of jobs.
 
-- **Role** — `j.id ∈ titleIds` from `matchTitleIds` (exact ∪ trigram ∪ vector).
-- **Company** — `j."companyId" ∈ companyIds` from `matchCompanyIds`.
-- **Skills** — `matched > 0`: the job shares ≥1 of the typed skills.
+## Step B — four bounded retrieval paths
 
-Typing a role therefore **also** surfaces skill-matched jobs that don't match the role. **Experience is the only hard filter**: the typed years must fall inside the job's `[min, max]` band (null input → disabled; null job bounds → open-ended `0`/`99`). Experience is never scored or shown. `tier` records how a job qualified — `0` company, `1` role, `2` skill-only — and drives the default sort and the floor. The card/return shape still carries `roleOrCompanyMatched`, now derived as `tier < 2`.
+| Path | How | Bound |
+|---|---|---|
+| Company | exact name → trigram (≥0.4) | ≤5 companies |
+| Role (title) | exact ∪ trigram (≥0.3) ∪ `Job.embedding` ANN | ≤20 per tier |
+| Skills | jobs with ≥1 `JobSkill.skillId ∈ coveredSkillIds`, **ordered by coverage ratio** (`covered/required`, GROUP BY over the indexed join, experience filter applied first) | top 1,000 (`MAX_SKILL_CANDIDATES`) |
+| Projects | HNSW ANN over `JobCapability.embedding` per project vector | top 50 per vector (`MAX_CAPABILITY_MATCHES`) |
 
----
+The skill-path bound matters at scale: a common covered skill like `python`
+could match tens of thousands of jobs. The coverage-ratio `ORDER BY` before the
+`LIMIT` is intentional — without it the cap would keep arbitrary low-coverage
+jobs. Do not "optimize" the aggregation away.
 
-## Scoring — the blended match % (computed in SQL)
+`Job.embedding` is now embedded from **title + roleType + roleSummary only**
+(no skills suffix) and is used solely for the title ANN tier — never for the
+displayed match %.
 
-The headline `score` is the **equal mean** of whichever sub-scores apply — no weights ([`lib/search.ts`](../lib/search.ts), the `sub`/`scored` CTEs).
+## Step C — scoring (all in SQL)
 
-### Skills% (`skillsPct`)
 ```
-coverage  = (job skill tokens covered by an input skill) / (job's skill-token count)
-skillsPct = round(coverage × 100)            // e.g. 5/7 → 71
-```
-Both sides are normalized (lowercased, non-alphanumerics stripped) and matched as a substring against the job's `,`/`;`/`|`-split tokens, so `"node.js"` matches `"NodeJS"`. No skills typed → `skillsPct` null.
+requiredSkillScore   = covered / required × 100        (set membership; 0 when the
+                                                         candidate offers no skills)
+capabilityEvidence   = per capability: MAX cosine vs project vectors,
+                       rescaled through window 0.10 (floor) – 0.35 (ceiling)
+projectEvidenceScore = AVG(capabilityEvidence) across the job's capabilities
+                       (0 when the candidate has no projects)
 
-### Projects% (`projectsPct`) — semantic, per-project
-Only scored when the resume has project keywords (extracted by LLM at parse time, see [`PROJECT_BASED_RETRIEVAL.md`](./PROJECT_BASED_RETRIEVAL.md)). Each project's keyword string is embedded separately via Bedrock Titan; `projSim` is the MAX cosine across all project vectors for that job:
-
-```
-projSim     = MAX cosine(job.embedding, projVecLits[i])   for i in projects
-projectsPct = round( clamp( (projSim - 0.40) / 0.60, 0, 1 ) × 100 )
+matchScore = round( 0.65 × requiredSkillScore + 0.35 × projectEvidenceScore )
 ```
 
-`MIN_PROJECT_SIMILARITY = 0.40` filters Titan's background noise (~0.10–0.20 for unrelated texts). No project keywords → `projectsPct` null (projectless candidates aren't penalized).
+- Weights are fixed — skills carry the score, projects support it. Missing
+  evidence scores 0, not null, so a projectless resume caps at 65. (Only when
+  the candidate supplies *neither* skills nor projects is the score null —
+  badge shows `—`.)
+- Details, calibration data, and the project↔capability model:
+  [`PROJECT_BASED_RETRIEVAL.md`](./PROJECT_BASED_RETRIEVAL.md).
 
-### Blend
-```
-score = round( mean( non-null [skillsPct, projectsPct] ) )
-```
-Both null → `score` null → badge `—`. The card hover shows the `Skills%` / `Projects%` breakdown behind the headline.
+## Tiers and slot selection (`default` sort)
 
----
+`tier` records preference, never the %: `0` selected company, `1` requested
+role, `2` personalized (skills/projects). A job takes its highest-priority
+matching tier.
 
-## Sort modes — company → role → skill, with the 15-floor / backfill
+- **Tier 0 (company): hard cap 10** (`TIER0_CAP`) — a large company can't
+  consume the whole list.
+- **Tier 1 (role): reserve `min(10, available)`** (`TIER1_RESERVE`) — the first
+  10 role jobs can never be displaced by Tier 2; role jobs beyond 10 compete in
+  backfill by matchScore (neither capped at 10 nor unconditionally guaranteed 10).
+- **Backfill**: remaining slots fill by matchScore from tier-1 extras and tier 2,
+  up to `MAX_RESULTS = 30`.
+- **Display**: tier ASC, then `matchScore DESC, createdAt ASC` within each tier.
 
-The blend is the SQL `ORDER BY` key, so each mode `LIMIT 30` correctly. The UI toggle (`Best match` / `Match score`) re-runs the search with the chosen mode.
-
-- **`default` (Best match):** three tiers in order — **company (0) → role (1) → skill (2)**.
-  - *Company tier* is shown **in full and first**, even at 0% match: searching a company means you see that company's roles. (A role+company job counts as company.)
-  - *Role and skill tiers* are each **guaranteed up to `MIN_SLOTS_PER_TIER = 15` slots** of whatever the company tier didn't consume, then the list **backfills toward 30** by score. So 40 role + 3 skill → 27 role + 3 skill (skill floor honored, role backfills); 3 role + 40 skill → 3 role + 27 skill.
-  - *Display*: by tier (company, then role, then skill), each ordered by `score`.
-- **`score` (Match score):** pure `score DESC` top-30, tier ignored — a higher-scoring non-company job can top the list.
-
-> Worked example: searching role "Engineer" + company "VakilSearch". `default` → VakilSearch's jobs first (company tier, even at low match), then other companies' engineer jobs by score, then skill-only. `score` → ordered purely by match %, VakilSearch not floated.
-
-The thin JS mapper then parses `focusRoundPattern` into rounds and maps `experienceMinYears` to a display `seniority` via `deriveSeniority` (`≤2 entry`, `≤6 mid`, else `senior`) — no re-sorting (SQL already ordered + limited).
-
----
+`score` sort ignores tiers entirely: global top-30 by matchScore.
 
 ## Limits at a glance
 
@@ -267,61 +200,38 @@ The thin JS mapper then parses `focusRoundPattern` into rounds and maps `experie
 |---|---|---|
 | Title tier — exact / trigram / vector (each) | 20 | `MAX_TITLE_MATCHES_PER_TIER` |
 | Company tier — exact / trigram (each) | 5 | literal |
-| Best-match floor — slots guaranteed for role & skill tiers | 15 | `MIN_SLOTS_PER_TIER` |
-| Final list returned / displayed (and SQL `LIMIT`) | 30 | `MAX_RESULTS` |
-
-Retrieval equals display: the query computes the blend in SQL and `LIMIT 30`s directly — there is no oversized candidate pool. Under `default`, the company tier is shown first in full, then the role and skill tiers are each guaranteed up to 15 of the remaining slots before backfilling toward 30. Role backfill is in turn bounded by how many ids the title tiers yield (≤20 each).
-
----
+| Skill path — candidates by coverage ratio | 1,000 | `MAX_SKILL_CANDIDATES` |
+| Project path — capability ANN per project vector | 50 | `MAX_CAPABILITY_MATCHES` |
+| Tier 0 (company) display cap | 10 | `TIER0_CAP` |
+| Tier 1 (role) reserved slots | 10 | `TIER1_RESERVE` |
+| Final list (and SQL `LIMIT`) | 30 | `MAX_RESULTS` |
+| Semantic skill coverage floor | 0.30 | `SEMANTIC_SKILL_MIN` |
+| Project-evidence window | 0.10–0.35 | `PROJECT_EVIDENCE_MIN/MAX` |
+| Blend weights | 65/35 | `SKILL_WEIGHT` / `PROJECT_WEIGHT` |
 
 ## What the inputs mean
 
 | Input | Candidate set | Score | Order (default) |
 |---|---|---|---|
-| `Accenture` | Accenture jobs (company tier) | badge `—` (no skills) | company tier, then recency |
-| `SDE` | title matches **∪** any skill/project matches | skills/projects where present | role tier first |
-| `[React, Node.js]` | jobs sharing ≥1 skill | coverage % (+ projects if resume) | by blended % |
-| `SDE` + `[React]` + `3 yrs` | title ∪ skill matches, band-filtered | React coverage (+ projects) | role tier first, then % |
-| `SDE` + `Accenture` | title ∪ Accenture ∪ skill matches | skills/projects where present | Accenture jobs first, then role, then skill |
-| resume w/ projects | (no extra candidates) | skills% **and** projects% blended | role tier first, then % |
+| `Accenture` | Accenture jobs (tier 0, ≤10) | badge `—` (nothing to score) | company first, then recency |
+| `Data Science` | title matches ∪ nothing else | `—` | role tier |
+| skills only | top-1,000 coverage-ranked jobs | 65% × coverage | by matchScore |
+| parsed resume (skills + projects) | skills ∪ capability-ANN matches | full 65/35 blend | role reserve, then matchScore |
+| company + resume | all four paths | full blend (company does NOT boost %) | company (≤10) → role (≥10) → rest |
 | nothing | — | — | `[]` (guard) |
-
----
-
-## Indexes ([`prisma/db-init.sql`](../prisma/db-init.sql))
-
-```sql
-CREATE EXTENSION pg_trgm; CREATE EXTENSION vector;
-
-CREATE INDEX job_title_trgm    ON "Job"     USING GIN ("jobTitle" gin_trgm_ops);
-CREATE INDEX job_skills_trgm   ON "Job"     USING GIN ("requiredSkills" gin_trgm_ops);
-CREATE INDEX company_name_trgm ON "Company" USING GIN (name gin_trgm_ops);
-CREATE INDEX job_embedding_hnsw ON "Job"
-  USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
-
--- DB-level dedup: one Job per (company, case-folded title)
-ALTER TABLE "Job" ADD COLUMN dedup_key text
-  GENERATED ALWAYS AS ("companyId" || '|' || lower(btrim("jobTitle"))) STORED;
-CREATE UNIQUE INDEX job_dedup_key_uniq ON "Job" (dedup_key);
-```
-
-HNSW is the approximate-nearest-neighbour index for the vector tier and the project semantic fallback (~10ms lookups). The generated `dedup_key` + unique index enforce one job per company/title at the DB level; the importer also dedups upstream, keeping the row with the richest round pattern.
-
----
 
 ## Files
 
 | File | What it does |
 |---|---|
-| [`lib/search.ts`](../lib/search.ts) | Title + company matchers, union ranking SQL, blend + sort |
+| [`lib/search.ts`](../lib/search.ts) | Covered-skill resolution, four matchers, scoring SQL, tiers, `scoreJobMatch` |
+| [`lib/glosses.ts`](../lib/glosses.ts) | `normalizeSkillToken`, batched LLM gloss generation |
 | [`lib/embeddings.ts`](../lib/embeddings.ts) | Bedrock Titan v2 embeddings + LRU cache + `toPgVectorLiteral` |
-| [`lib/rounds.ts`](../lib/rounds.ts) | `parseRounds()` — `focusRoundPattern` → ordered round list |
-| [`lib/onboarding.ts`](../lib/onboarding.ts) | `deriveSearchInput` — profile → `SearchInput` (incl. `projectTexts`, `sort`) |
-| [`lib/types.ts`](../lib/types.ts) | `JobCard` (`score`, `skillsPct`, `projectsPct`, `roleOrCompanyMatched`), option types |
-| [`prisma/schema.prisma`](../prisma/schema.prisma) | `Company` / `Job` models + `vector(512)` embedding |
-| [`prisma/db-init.sql`](../prisma/db-init.sql) | Extensions, GIN/HNSW indexes, dedup key |
-| [`prisma/import-jobs.ts`](../prisma/import-jobs.ts) | Source import, dedup, composite job embeddings |
-| [`app/api/search/route.ts`](../app/api/search/route.ts) | `POST /api/search` → `searchJobs` |
-| [`app/page.tsx`](../app/page.tsx) | Filters (role, company, experience, skills), sort toggle, card hover breakdown |
-</content>
-</invoke>
+| [`lib/job-match-backfill.ts`](../lib/job-match-backfill.ts) | Populates/repairs `Skill`, `JobSkill`, `JobCapability` (resumable, self-healing) |
+| [`lib/resume.ts`](../lib/resume.ts) | Parser: skills as `{name, gloss}` incl. soft skills, projects + keywords |
+| [`lib/onboarding.ts`](../lib/onboarding.ts) | `deriveSearchInput` — profile → `SearchInput` (glossed skills, project texts) |
+| [`lib/types.ts`](../lib/types.ts) | `JobCard` (`score`, `skillsPct`, `projectsPct`, …) |
+| [`prisma/schema.prisma`](../prisma/schema.prisma) | `Company` / `Job` / `Skill` / `JobSkill` / `JobCapability` |
+| [`app/api/search/route.ts`](../app/api/search/route.ts) | `POST /api/search` → `searchJobs` (accepts `skills` or legacy `skillNames`) |
+| [`app/api/jobs/[jobId]/match/route.ts`](../app/api/jobs/%5BjobId%5D/match/route.ts) | `POST` → `scoreJobMatch` for the job detail badge |
+| [`app/page.tsx`](../app/page.tsx) | Filters, sort toggle, "Required skills" / "Project evidence" breakdown |

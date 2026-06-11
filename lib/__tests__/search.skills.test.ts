@@ -1,20 +1,22 @@
 // Group 5 — Skills-only search
-// Skills bypass the embedding pipeline entirely and are matched via substring LIKE
-// in the final ranking SQL. These mocked tests cover the JS-side behaviour:
-// no title/company queries run, embed() is never called, and the single final
-// SQL result is mapped through verbatim (order preserved).
-// The actual skill-coverage scoring and the WHERE cov.matched > 0 exclusion live
-// in SQL and are covered by the pgvector integration suite, not here.
+// Skills resolve against the Skill catalog first (exact token; semantic only
+// when a gloss is present), then the bounded skill path retrieves candidates,
+// then the final SQL scores them. These mocked tests cover the JS-side
+// behaviour; the SQL-side coverage/evidence math lives in the pgvector
+// integration suite, not here.
 //
-// $queryRaw call order for skills-only (no roleText, no companyText):
-//   CALL 1 → final ranking SQL only (no title or company queries run)
+// $queryRaw call order for skills-only (no roleText, no companyText, no gloss):
+//   CALL 1 → covered-skill resolution (Skill catalog)
+//   CALL 2 → skill-path candidates (JobSkill, bounded by coverage)
+//   CALL 3 → final scoring SQL
+// embed() is NOT called when no skill has a gloss and there is no role/project.
 
 import { describe, it, expect, beforeEach, type Mock } from "vitest";
 import { vi } from "vitest";
 import { searchJobs } from "../search";
 import { prisma } from "../prisma";
 import { embed, toPgVectorLiteral } from "../embeddings";
-import { FIXED_VEC, FIXED_VEC_LIT, makeRow } from "./helpers";
+import { FIXED_VEC, FIXED_VEC_LIT, makeRow, makeSkillId, makeSkillJob } from "./helpers";
 
 vi.mock("../prisma", () => ({ prisma: { $queryRaw: vi.fn() } }));
 vi.mock("../embeddings", () => ({ embed: vi.fn(), toPgVectorLiteral: vi.fn() }));
@@ -28,38 +30,56 @@ beforeEach(() => {
 });
 
 describe("skills-only search", () => {
-  it("runs only the final SQL (no title/company queries, no embed) for a skills-only search", async () => {
-    // Guard passes because skillNames is non-empty. No title or company queries
-    // run — only the final ranking SQL — and embed() is never called. The mapped
-    // row carries the SQL-computed skill coverage straight through.
-    q().mockResolvedValueOnce([
-      makeRow({ matched: 1, required: 1, skillsPct: 100, score: 100 }),
-    ]);
+  it("resolves the catalog, retrieves skill candidates, and scores — no embed without glosses", async () => {
+    q()
+      .mockResolvedValueOnce([makeSkillId("skill-react")]) // covered skills
+      .mockResolvedValueOnce([makeSkillJob("job-1")]) // skill-path candidates
+      .mockResolvedValueOnce([
+        makeRow({ covered: 1, required: 1, skillsPct: 100, score: 65, tier: 2 }),
+      ]); // final
 
     const result = await searchJobs({
       roleText: "",
       companyText: "",
-      skillNames: ["React"],
+      skills: [{ name: "React" }],
       experienceYears: null,
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0]!.score).toBe(100);
+    expect(result[0]!.score).toBe(65);
     expect(result[0]!.matchedSkills).toBe(1);
     expect(result[0]!.totalSkills).toBe(1);
-    // embed must NOT be called — no roleText
+    expect(result[0]!.roleOrCompanyMatched).toBe(false);
+    // embed must NOT be called — no gloss, no roleText, no projects
     expect(embed).not.toHaveBeenCalled();
-    // Only 1 DB call (final SQL)
-    expect(q()).toHaveBeenCalledTimes(1);
+    expect(q()).toHaveBeenCalledTimes(3);
+  });
+
+  it("embeds the gloss (not the name) when a skill carries one", async () => {
+    q()
+      .mockResolvedValueOnce([makeSkillId("skill-aws")])
+      .mockResolvedValueOnce([makeSkillJob("job-1")])
+      .mockResolvedValueOnce([makeRow()]);
+
+    await searchJobs({
+      roleText: "",
+      companyText: "",
+      skills: [{ name: "AWS", gloss: "AWS (Amazon Web Services): cloud computing platform" }],
+      experienceYears: null,
+    });
+
+    expect(embed).toHaveBeenCalledWith(
+      "AWS (Amazon Web Services): cloud computing platform",
+    );
   });
 
   it("returns [] and makes no DB calls when all skill entries are blank strings", async () => {
-    // After trim + filter(Boolean), skillNames becomes [].
-    // Combined with no role/company, the guard fires before any query is made.
+    // After trim + filter, skills becomes []. Combined with no role/company/
+    // projects, the guard fires before any query is made.
     const result = await searchJobs({
       roleText: "",
       companyText: "",
-      skillNames: ["  ", "", "\t"],
+      skills: [{ name: "  " }, { name: "" }, { name: "\t" }],
       experienceYears: null,
     });
 
@@ -68,17 +88,20 @@ describe("skills-only search", () => {
   });
 
   it("preserves the SQL result order across multiple jobs", async () => {
-    // The SQL returns rows already ranked (job-2 above job-1). searchJobs maps them
-    // through without reordering, so the array order is preserved.
-    q().mockResolvedValueOnce([
-      makeRow({ jobId: "job-2", skillsPct: 100, score: 100 }),
-      makeRow({ jobId: "job-1", skillsPct: 50, score: 50 }),
-    ]);
+    // The SQL returns rows already ranked (job-2 above job-1). searchJobs maps
+    // them through without reordering, so the array order is preserved.
+    q()
+      .mockResolvedValueOnce([makeSkillId("skill-react")])
+      .mockResolvedValueOnce([makeSkillJob("job-2"), makeSkillJob("job-1")])
+      .mockResolvedValueOnce([
+        makeRow({ jobId: "job-2", skillsPct: 100, score: 65 }),
+        makeRow({ jobId: "job-1", skillsPct: 50, score: 33 }),
+      ]);
 
     const result = await searchJobs({
       roleText: "",
       companyText: "",
-      skillNames: ["React", "TypeScript"],
+      skills: [{ name: "React" }, { name: "TypeScript" }],
       experienceYears: null,
     });
 

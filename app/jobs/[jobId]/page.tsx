@@ -79,14 +79,19 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
     queryKey: ["job-match", jobId, profile?.skills, profile?.projectKeywords],
     enabled: !!profile,
     queryFn: () => {
-      const { skillNames, projectTexts } = deriveSearchInput(profile!);
-      return postJson<{ match?: { score: number | null } }>(
-        `/api/jobs/${jobId}/match`,
-        { skillNames, projectTexts },
-      );
+      const { skills, projectTexts } = deriveSearchInput(profile!);
+      return postJson<{
+        match?: {
+          score: number | null;
+          skillsPct: number | null;
+          projectsPct: number | null;
+        };
+      }>(`/api/jobs/${jobId}/match`, { skills, projectTexts });
     },
   });
   const matchPercent = matchData?.match?.score ?? undefined;
+  const skillsPct = matchData?.match?.skillsPct ?? undefined;
+  const projectsPct = matchData?.match?.projectsPct ?? undefined;
 
   useEffect(() => {
     try {
@@ -128,7 +133,13 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
         )}
 
         {detail && (
-          <JobDetailView detail={detail} matchPercent={matchPercent} profile={profile} />
+          <JobDetailView
+            detail={detail}
+            matchPercent={matchPercent}
+            skillsPct={skillsPct}
+            projectsPct={projectsPct}
+            profile={profile}
+          />
         )}
       </div>
     </main>
@@ -138,16 +149,24 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
 function JobDetailView({
   detail,
   matchPercent,
+  skillsPct,
+  projectsPct,
   profile,
 }: {
   detail: JobDetail;
   matchPercent: number | undefined;
+  skillsPct: number | undefined;
+  projectsPct: number | undefined;
   profile: OnboardingProfile | null;
 }) {
   const { job } = detail;
   const experience = formatExperience(job.experienceMinYears, job.experienceMaxYears);
   const meta = [job.seniority, experience, job.location, job.workMode].filter(Boolean);
   const pill = matchPill(matchPercent);
+  const skills = (job.requiredSkills ?? "")
+    .split(/[,;|]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -189,6 +208,12 @@ function JobDetailView({
                 <span className={`h-1.5 w-1.5 rounded-full ${pill.dot}`} />
                 {matchPercent}% {pill.label}
               </div>
+              {(skillsPct != null || projectsPct != null) && (
+                <div className="mt-2 flex items-center justify-end gap-3 text-[12px] font-semibold text-slate-500">
+                  {skillsPct != null && <span>Skills {skillsPct}%</span>}
+                  {projectsPct != null && <span>Projects {projectsPct}%</span>}
+                </div>
+              )}
               <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
                 Based on your resume
               </p>
@@ -201,6 +226,24 @@ function JobDetailView({
           </p>
         )}
       </section>
+
+      {skills.length > 0 && (
+        <div className="border-t border-slate-200 p-8 sm:p-10">
+          <h2 className="mb-6 text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
+            Required skills
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {skills.map((s, i) => (
+              <span
+                key={i}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-medium text-slate-700"
+              >
+                {s}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="border-t border-slate-200 bg-slate-50 p-8 sm:p-10">
         <Rounds rounds={job.rounds} job={job} profile={profile} />

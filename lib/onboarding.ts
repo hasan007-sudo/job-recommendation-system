@@ -10,6 +10,10 @@ export type OnboardingProfile = {
   name: string;
   education: { degree: string; major: string; institution: string; years: string; standing: string };
   skills: string[];
+  // Per-skill one-line gloss (name → gloss), emitted by the parser in the same
+  // LLM call. Glosses are the embedding input for semantic skill matching;
+  // skills without one (pre-gloss profiles) fall back to keyword-only matching.
+  skillGlosses?: Record<string, string>;
   // Raw project entries ("name · description"), kept separate from the merged
   // `experience` list so the project-match criterion can score against them.
   projects: string[];
@@ -28,6 +32,7 @@ export const EMPTY_PROFILE: OnboardingProfile = {
   name: "",
   education: { degree: "", major: "", institution: "", years: "", standing: "" },
   skills: [],
+  skillGlosses: {},
   projects: [],
   projectKeywords: [],
   experience: [],
@@ -39,19 +44,26 @@ export const EMPTY_PROFILE: OnboardingProfile = {
 
 // Build the input for the existing job search from an (edited) profile.
 export function deriveSearchInput(profile: OnboardingProfile): SearchInput {
-  // Use LLM-extracted per-project keyword strings when available; fall back to
-  // raw project prose for sessions parsed before this field existed.
+  // Project evidence text = description + keywords. Descriptions carry the
+  // stronger signal of what was built; keywords sharpen the domain terms.
+  // Pre-keyword profiles fall back to prose-only.
   const projectTexts =
-    profile.projectKeywords && profile.projectKeywords.length > 0
-      ? profile.projectKeywords.map((kws) => kws.join(", ")).filter(Boolean)
-      : profile.projects.length > 0
-        ? [profile.projects.join(". ")]
-        : [];
+    profile.projects.length > 0
+      ? profile.projects.map((p, i) => {
+          const kws = profile.projectKeywords?.[i] ?? [];
+          return kws.length > 0 ? `${p}. Keywords: ${kws.join(", ")}` : p;
+        })
+      : (profile.projectKeywords ?? [])
+          .map((kws) => kws.join(", "))
+          .filter(Boolean);
 
   return {
     companyText: "",
     roleText: profile.roleHint,
-    skillNames: profile.skills,
+    skills: profile.skills.map((name) => ({
+      name,
+      gloss: profile.skillGlosses?.[name],
+    })),
     experienceYears: profile.experienceYears,
     projectTexts,
     sort: "default",

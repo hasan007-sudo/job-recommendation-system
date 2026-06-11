@@ -99,7 +99,7 @@ Return ONLY a single JSON object, no prose, matching exactly this shape:
     { "institution": string, "degree": string, "major": string | null,
       "graduation_year": number | null, "cgpa": string | null, "is_current": boolean }
   ],
-  "skills": string[],            // every technical skill, tool, framework, and language listed
+  "skills": [ { "name": string, "gloss": string } ],  // every technical skill, tool, framework, language, AND explicitly listed soft skill; gloss = 8-15 word description expanding acronyms and naming the domain
   "projects": [ { "name": string, "description": string | null, "keywords": string[] } ],  // side, personal, academic, or open-source projects only; keywords = 3-8 domain skills / tech concepts
   "work_experience": [ { "company": string, "role": string } ],       // paid employment at a real company only
   "experience_years": number,    // total full-time work experience in years (0 for students/new grads; internships count as ~0)
@@ -107,7 +107,8 @@ Return ONLY a single JSON object, no prose, matching exactly this shape:
 }
 Rules:
 - Use [] for missing lists and null for missing scalars; never invent data.
-- "skills" must be a flat, de-duplicated list of concrete skill names.
+- "skills" must be a flat, de-duplicated list. Include soft skills the resume explicitly lists (e.g. "Communication", "Team Collaboration") alongside technical skills — they match soft-skill job requirements.
+- Each skill's "gloss" is one line describing what the skill is, e.g. {"name": "AWS", "gloss": "AWS (Amazon Web Services): cloud computing platform, cloud infrastructure services"}. Glosses are embedded for semantic matching — never leave them empty.
 - "work_experience" is ONLY actual job-related work: paid employment (full-time, part-time, contract) or internships at a real company or organization. Each entry must be a role the candidate was employed for. Internships count here.
 - "projects" is ONLY side-projects, personal projects, academic/course projects, hackathon work, and open-source contributions. These are NOT employment.
 - Never put a project in "work_experience" and never put a job in "projects". If something has no employing company (e.g. a personal app, a GitHub repo, a college project), it is a project, not work experience.
@@ -130,7 +131,15 @@ const ParsedResume = z.object({
       }),
     )
     .default([]),
-  skills: z.array(z.string()).default([]),
+  // Accept both the new {name, gloss} shape and a bare string (model drift safety).
+  skills: z
+    .array(
+      z.union([
+        z.object({ name: z.string(), gloss: z.string().nullish() }),
+        z.string().transform((name) => ({ name, gloss: null })),
+      ]),
+    )
+    .default([]),
   projects: z
     .array(
       z.object({
@@ -266,6 +275,15 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
     .filter((w) => w.role || w.company)
     .map((w) => [w.role, w.company].filter(Boolean).join(" · "));
 
+  const skillNames = dedupe(
+    parsed.skills.map((s) => s.name.trim()).filter(Boolean),
+  );
+  const skillGlosses: Record<string, string> = {};
+  for (const s of parsed.skills) {
+    const name = s.name.trim();
+    if (name && s.gloss?.trim()) skillGlosses[name] = s.gloss.trim();
+  }
+
   return {
     name: parsed.name ?? "",
     education: {
@@ -275,7 +293,8 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
       years: edu?.graduation_year ? String(edu.graduation_year) : "",
       standing: edu?.is_current ? "current" : "",
     },
-    skills: dedupe(parsed.skills.map((s) => s.trim()).filter(Boolean)),
+    skills: skillNames,
+    skillGlosses,
     projects,
     projectKeywords: parsed.projects.map((p) => p.keywords ?? []),
     experience: work,
@@ -293,7 +312,7 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
 function buildResumeText(parsed: ParsedResume): string {
   const roleHint =
     parsed.strongest_domain ?? parsed.work_experience[0]?.role ?? "";
-  const skills = dedupe(parsed.skills.map((s) => s.trim()).filter(Boolean));
+  const skills = dedupe(parsed.skills.map((s) => s.name.trim()).filter(Boolean));
   const projects = parsed.projects
     .filter((p) => p.name)
     .map((p) =>

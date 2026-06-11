@@ -36,7 +36,7 @@ describe("company-only search", () => {
     const result = await searchJobs({
       roleText: "",
       companyText: "Google",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -57,7 +57,7 @@ describe("company-only search", () => {
     const result = await searchJobs({
       roleText: "",
       companyText: "Googl", // partial / typo
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -74,7 +74,7 @@ describe("company-only search", () => {
     const result = await searchJobs({
       roleText: "",
       companyText: "Ggl",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -92,7 +92,7 @@ describe("company-only search", () => {
     const result = await searchJobs({
       roleText: "",
       companyText: "Unknown Corp XYZ",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 
@@ -108,7 +108,7 @@ describe("company-only search", () => {
     await searchJobs({
       roleText: "",
       companyText: "Acme",
-      skillNames: [],
+      skills: [],
       experienceYears: null,
     });
 

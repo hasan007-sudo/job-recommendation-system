@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Loader2, X } from "lucide-react";
 import type { OnboardingProfile } from "../lib/onboarding";
@@ -33,7 +33,9 @@ type SortMode = "default" | "score";
 type SearchInput = {
   companyText: string;
   roleText: string;
-  skillNames: string[];
+  // Skills with their parse-time glosses (embedding input for semantic
+  // coverage). Manually typed skills have no gloss → exact token match only.
+  skills: { name: string; gloss?: string }[];
   experienceYears: number | null;
   projectTexts: string[];
   sort: SortMode;
@@ -58,13 +60,19 @@ export default function HomePage() {
   const router = useRouter();
   const [profile, setProfile] = useState<OnboardingProfile | null>(null);
   const [skillNames, setSkillNames] = useState<string[]>([]);
+  // name → gloss for profile-parsed skills; manually added chips have none.
+  const [skillGlosses, setSkillGlosses] = useState<Record<string, string>>({});
   const [skillSearch, setSkillSearch] = useState("");
   const [roleText, setRoleText] = useState<string>("");
   const [companyText, setCompanyText] = useState<string>("");
   const [experienceYears, setExperienceYears] = useState<string>("");
   const [projectTexts, setProjectTexts] = useState<string[]>([]);
   const [sort, setSort] = useState<SortMode>("default");
-  const [cards, setCards] = useState<JobCard[] | null>(null);
+  // The committed search input that drives the query. Only changes on "Update
+  // results", changeSort, or autosearch — not on every keystroke. Modeling
+  // search as a useQuery keyed by this input gives caching (instant re-display
+  // on back-navigation), request dedupe, and no stale data on filter change.
+  const [searchInput, setSearchInput] = useState<SearchInput | null>(null);
 
   const optionsQuery = useQuery({
     queryKey: ["options"],
@@ -72,31 +80,30 @@ export default function HomePage() {
   });
   const skills = optionsQuery.data?.skills ?? [];
 
-  const searchMutation = useMutation({
-    mutationFn: (input: SearchInput) =>
-      postJson<{ cards: JobCard[] }>("/api/search", input),
-    onSuccess: (data, input) => {
-      const newCards: JobCard[] = data.cards ?? [];
-      setCards(newCards);
-      sessionStorage.setItem(
-        "rounds:filters",
-        JSON.stringify({
-          roleText: input.roleText,
-          companyText: input.companyText,
-          skillNames: input.skillNames,
-          experienceYears:
-            input.experienceYears == null ? "" : String(input.experienceYears),
-        }),
-      );
-    },
+  const searchQuery = useQuery({
+    queryKey: ["search", searchInput],
+    queryFn: () => postJson<{ cards: JobCard[] }>("/api/search", searchInput!),
+    enabled: searchInput != null,
+    // Dedupe the overlapping/duplicate fires (StrictMode, remounts) and serve
+    // cache on back-navigation. No placeholderData on purpose: a new queryKey
+    // yields undefined until resolved, so we show loading — never stale data.
+    staleTime: 60_000,
   });
 
-  const loading = searchMutation.isPending;
-  const error = searchMutation.isError
+  const cards = searchQuery.data?.cards ?? null;
+  const loading = searchInput != null && searchQuery.isPending;
+  const error = searchQuery.isError
     ? "Could not run search. Check the database connection."
     : optionsQuery.isError
       ? "Connect the database and import jobs to load options."
       : "";
+
+  // Commit a search: update the query key (triggers the fetch) and persist the
+  // full input so a remount rebuilds an identical key → cache hit.
+  function runSearch(input: SearchInput) {
+    setSearchInput(input);
+    sessionStorage.setItem("rounds:search", JSON.stringify(input));
+  }
 
   useEffect(() => {
     const raw = sessionStorage.getItem("rounds:profile");
@@ -106,14 +113,23 @@ export default function HomePage() {
         const p: OnboardingProfile = JSON.parse(raw);
         setProfile(p);
         profileSkills = p.skills ?? null;
+        if (p.skillGlosses) setSkillGlosses(p.skillGlosses);
         if (p.roleHint) setRoleText(p.roleHint);
         if (p.experienceYears != null)
           setExperienceYears(String(p.experienceYears));
-        if (p.projectKeywords?.length)
+        // Description + keywords per project — same shape deriveSearchInput
+        // builds (descriptions carry the stronger capability-match signal).
+        if (p.projects?.length)
+          setProjectTexts(
+            p.projects.map((proj, i) => {
+              const kws = p.projectKeywords?.[i] ?? [];
+              return kws.length > 0 ? `${proj}. Keywords: ${kws.join(", ")}` : proj;
+            }),
+          );
+        else if (p.projectKeywords?.length)
           setProjectTexts(
             p.projectKeywords.map((kws) => kws.join(", ")).filter(Boolean),
           );
-        else if (p.projects?.length) setProjectTexts([p.projects.join(". ")]);
       } catch {
         // ignore
       }
@@ -124,20 +140,33 @@ export default function HomePage() {
       sessionStorage.removeItem("rounds:autosearch");
       try {
         const input = JSON.parse(auto);
-        const skills = Array.isArray(input.skillNames) ? input.skillNames : [];
+        // New payloads carry glossed skills; older cached ones carry skillNames.
+        const autoSkills: { name: string; gloss?: string }[] = Array.isArray(
+          input.skills,
+        )
+          ? input.skills
+          : Array.isArray(input.skillNames)
+            ? input.skillNames.map((name: string) => ({ name }))
+            : [];
         const autoProjectTexts: string[] = Array.isArray(input.projectTexts)
           ? input.projectTexts
           : typeof input.projectText === "string" && input.projectText
             ? [input.projectText]
             : [];
         const autoSort: SortMode = input.sort === "score" ? "score" : "default";
-        setSkillNames(skills);
+        setSkillNames(autoSkills.map((s) => s.name));
+        setSkillGlosses((cur) => ({
+          ...cur,
+          ...Object.fromEntries(
+            autoSkills.filter((s) => s.gloss).map((s) => [s.name, s.gloss!]),
+          ),
+        }));
         setProjectTexts(autoProjectTexts);
         setSort(autoSort);
-        searchMutation.mutate({
+        runSearch({
           companyText: "",
           roleText: input.roleText ?? "",
-          skillNames: skills,
+          skills: autoSkills,
           experienceYears: input.experienceYears ?? null,
           projectTexts: autoProjectTexts,
           sort: autoSort,
@@ -148,19 +177,36 @@ export default function HomePage() {
       }
     }
 
-    const cachedFilters = sessionStorage.getItem("rounds:filters");
-    if (cachedFilters) {
+    // Back-navigation / reload: rebuild the full committed input so the query
+    // key matches the cached entry and results re-display instantly.
+    const cachedSearch = sessionStorage.getItem("rounds:search");
+    if (cachedSearch) {
       try {
-        const f = JSON.parse(cachedFilters);
-        if (typeof f.roleText === "string") setRoleText(f.roleText);
-        if (typeof f.companyText === "string") setCompanyText(f.companyText);
-        if (Array.isArray(f.skillNames)) setSkillNames(f.skillNames);
-        if (typeof f.experienceYears === "string")
-          setExperienceYears(f.experienceYears);
+        const input: SearchInput = JSON.parse(cachedSearch);
+        setRoleText(input.roleText ?? "");
+        setCompanyText(input.companyText ?? "");
+        setSkillNames((input.skills ?? []).map((s) => s.name));
+        setSkillGlosses((cur) => ({
+          ...cur,
+          ...Object.fromEntries(
+            (input.skills ?? [])
+              .filter((s) => s.gloss)
+              .map((s) => [s.name, s.gloss!]),
+          ),
+        }));
+        setExperienceYears(
+          input.experienceYears == null ? "" : String(input.experienceYears),
+        );
+        setProjectTexts(input.projectTexts ?? []);
+        setSort(input.sort === "score" ? "score" : "default");
+        setSearchInput(input);
+        return;
       } catch {
-        // ignore
+        // fall through
       }
-    } else if (profileSkills?.length) {
+    }
+
+    if (profileSkills?.length) {
       setSkillNames(profileSkills);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -187,11 +233,17 @@ export default function HomePage() {
     setSkillSearch("");
   }
 
+  // Chips → glossed skills: profile-parsed skills carry their gloss, manual
+  // chips match by exact token only.
+  function buildSkills(): { name: string; gloss?: string }[] {
+    return skillNames.map((name) => ({ name, gloss: skillGlosses[name] }));
+  }
+
   function updateResults() {
-    searchMutation.mutate({
+    runSearch({
       companyText,
       roleText,
-      skillNames,
+      skills: buildSkills(),
       experienceYears: experienceYears === "" ? null : Number(experienceYears),
       projectTexts,
       sort,
@@ -202,10 +254,10 @@ export default function HomePage() {
   function changeSort(next: SortMode) {
     if (next === sort) return;
     setSort(next);
-    searchMutation.mutate({
+    runSearch({
       companyText,
       roleText,
-      skillNames,
+      skills: buildSkills(),
       experienceYears: experienceYears === "" ? null : Number(experienceYears),
       projectTexts,
       sort: next,
@@ -321,7 +373,7 @@ export default function HomePage() {
                     className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[14px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
                   />
                   {filteredSkills.length > 0 && (
-                    <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-sm">
                       {filteredSkills.map((s) => (
                         <button
                           key={s.name}
@@ -585,8 +637,8 @@ function JobRow({ card, onClick }: { card: JobCard; onClick: () => void }) {
             <p className="mb-2.5 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
               Match breakdown
             </p>
-            <BreakdownRow label="Skills" value={card.skillsPct} />
-            <BreakdownRow label="Projects" value={card.projectsPct} />
+            <BreakdownRow label="Required skills" value={card.skillsPct} />
+            <BreakdownRow label="Project evidence" value={card.projectsPct} />
           </div>
         )}
       </div>

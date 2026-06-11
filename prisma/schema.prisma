@@ -69,9 +69,56 @@ model Job {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  skills       JobSkill[]
+  capabilities JobCapability[]
+
   @@index([companyId])
   @@index([experienceMinYears, experienceMaxYears])
   // HNSW cosine ANN index; real DDL (USING hnsw + vector_cosine_ops) lives in
   // prisma/migrations/0_init. Declared here so Prisma Migrate doesn't drop it.
   @@index([embedding], map: "job_embedding_hnsw")
+}
+
+// Deduped skill catalog: one row per distinct normalized skill token across all
+// jobs. The vector is embed(gloss) — never embed(token); bare-token Titan
+// embeddings are not separable (see docs/ARCHITECTURE.md "Why glosses are mandatory").
+model Skill {
+  id        String     @id @default(cuid())
+  token     String     @unique // normalized: lowercased, [^a-z0-9] stripped
+  label     String // display name as first seen
+  gloss     String // LLM one-liner; the embedding input
+  embedding Unsupported("vector(512)")?
+  createdAt DateTime   @default(now())
+  jobs      JobSkill[]
+
+  // HNSW cosine ANN index; real DDL added by hand in the migration.
+  @@index([embedding], map: "skill_embedding_hnsw")
+}
+
+// Thin join: which jobs require which catalog skills. No vector — coverage is
+// set membership against the per-search resolved coveredSkillIds.
+model JobSkill {
+  jobId   String
+  skillId String
+  job     Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  skill   Skill  @relation(fields: [skillId], references: [id])
+
+  @@id([jobId, skillId])
+  @@index([skillId])
+}
+
+// One responsibility/capability statement per row, built at import from the
+// union of keyResponsibilities, roleSummary, and roundTechnical (requiredSkills
+// is deliberately excluded — skills own 65% of the blend already). Candidate
+// project vectors are compared against these via capped ANN top-K.
+model JobCapability {
+  id        String @id @default(cuid())
+  jobId     String
+  job       Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  text      String
+  embedding Unsupported("vector(512)")?
+
+  @@index([jobId])
+  // HNSW cosine ANN index; real DDL added by hand in the migration.
+  @@index([embedding], map: "job_capability_embedding_hnsw")
 }

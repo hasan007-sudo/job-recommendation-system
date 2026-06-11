@@ -5,6 +5,11 @@ import { searchJobs } from "../../../lib/search";
 const schema = z.object({
   companyText: z.string().default(""),
   roleText: z.string().default(""),
+  // Glossed skills (from parsed profiles). Skills without a gloss — and the
+  // legacy `skillNames` shape — match by exact normalized token only.
+  skills: z
+    .array(z.object({ name: z.string(), gloss: z.string().nullish() }))
+    .default([]),
   skillNames: z.array(z.string()).default([]),
   experienceYears: z.number().int().min(0).max(60).nullable().default(null),
   projectTexts: z.array(z.string()).default([]),
@@ -17,6 +22,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid search input" }, { status: 400 });
   }
 
-  const cards = await searchJobs(parsed.data);
+  const { skillNames, ...input } = parsed.data;
+  const skills =
+    input.skills.length > 0
+      ? input.skills
+      : skillNames.map((name) => ({ name }));
+
+  const cards = await searchJobs({ ...input, skills });
   return NextResponse.json({ cards });
 }

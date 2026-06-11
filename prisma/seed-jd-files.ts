@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { embed, toPgVectorLiteral } from "../lib/embeddings";
+import { backfillJobMatchData } from "../lib/job-match-backfill";
 
 // One-off seed for two local JD sources (Business Advisor.pdf, GenAI_Ideal_Employee_Profile.docx).
 // Parsed values are inlined — no runtime PDF/DOCX parsing. Reuses the same field shape,
@@ -256,9 +257,9 @@ const SEED_JOBS: SeedJob[] = [
   },
 ];
 
-// Same composite as import-jobs.ts: title + roleType + summary + skills.
+// Same role-retrieval composite as import-jobs.ts: title + roleType + summary.
 function embeddingText(job: SeedJob): string {
-  return `${job.jobTitle}. ${job.roleType ?? ""}. ${job.roleSummary ?? ""}. Skills: ${job.requiredSkills ?? ""}`;
+  return `${job.jobTitle}. ${job.roleType ?? ""}. ${job.roleSummary ?? ""}`;
 }
 
 async function main() {
@@ -339,8 +340,14 @@ async function main() {
     done++;
   }
 
+  // 4. Match-scoring data for the seeded jobs (Skill catalog, links, capabilities).
+  const match = await backfillJobMatchData(target, { log: console.log });
+
   await target.$disconnect();
-  console.log(`Seeded ${jobData.length} jobs across ${companyNames.length} companies. Embedded ${done}.`);
+  console.log(
+    `Seeded ${jobData.length} jobs across ${companyNames.length} companies. Embedded ${done}. ` +
+      `Match data: +${match.newSkills} skills, ${match.jobSkillLinks} links, ${match.capabilities} capabilities.`,
+  );
 }
 
 main().catch(async (error) => {
