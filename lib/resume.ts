@@ -101,7 +101,7 @@ Return ONLY a single JSON object, no prose, matching exactly this shape:
   ],
   "skills": [ { "name": string, "gloss": string } ],  // every technical skill, tool, framework, language, AND explicitly listed soft skill; gloss = 8-15 word description expanding acronyms and naming the domain
   "projects": [ { "name": string, "description": string | null, "keywords": string[] } ],  // side, personal, academic, or open-source projects only; keywords = 3-8 domain skills / tech concepts
-  "work_experience": [ { "company": string, "role": string } ],       // paid employment at a real company only
+  "work_experience": [ { "company": string, "role": string, "initiatives": string[] } ],  // paid employment at a real company only; initiatives = 2-4 one-sentence descriptions of distinct things built or delivered (tools, systems, features, analyses)
   "experience_years": number,    // total full-time work experience in years (0 for students/new grads; internships count as ~0)
   "strongest_domain": string | null  // e.g. "Web Development", "Data Science", "QA Automation"
 }
@@ -110,6 +110,7 @@ Rules:
 - "skills" must be a flat, de-duplicated list. Include soft skills the resume explicitly lists (e.g. "Communication", "Team Collaboration") alongside technical skills — they match soft-skill job requirements.
 - Each skill's "gloss" is one line describing what the skill is, e.g. {"name": "AWS", "gloss": "AWS (Amazon Web Services): cloud computing platform, cloud infrastructure services"}. Glosses are embedded for semantic matching — never leave them empty.
 - "work_experience" is ONLY actual job-related work: paid employment (full-time, part-time, contract) or internships at a real company or organization. Each entry must be a role the candidate was employed for. Internships count here.
+- "work_experience initiatives" must describe what was actually built or delivered — concrete systems, tools, analyses, or features, each as one sentence. Exclude soft-skill descriptions ("improved communication"), team sizes, and process words. Extract 2-4 per role; fewer if the resume gives fewer concrete details.
 - "projects" is ONLY side-projects, personal projects, academic/course projects, hackathon work, and open-source contributions. These are NOT employment.
 - Never put a project in "work_experience" and never put a job in "projects". If something has no employing company (e.g. a personal app, a GitHub repo, a college project), it is a project, not work experience.
 - FALLBACK: If the resume contains NO standalone projects at all (no side, personal, academic, hackathon, or open-source projects anywhere), derive 2-4 "projects" entries from the most significant initiatives described in the work experience instead — each a distinct system, feature, or migration the candidate built or led (e.g. a real-time gateway, a platform migration, a data pipeline). Use the initiative as "name", a one-sentence summary of what was built and its impact as "description", and 3-8 keywords. Keep "work_experience" as the normal company/role entries only. Apply this fallback ONLY when "projects" would otherwise be empty.
@@ -151,7 +152,11 @@ const ParsedResume = z.object({
     .default([]),
   work_experience: z
     .array(
-      z.object({ company: z.string().nullish(), role: z.string().nullish() }),
+      z.object({
+        company: z.string().nullish(),
+        role: z.string().nullish(),
+        initiatives: z.array(z.string()).default([]),
+      }),
     )
     .default([]),
   experience_years: z.number().nullish(),
@@ -274,6 +279,7 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
   const work = parsed.work_experience
     .filter((w) => w.role || w.company)
     .map((w) => [w.role, w.company].filter(Boolean).join(" · "));
+  const workInitiatives = parsed.work_experience.map((w) => w.initiatives ?? []);
 
   const skillNames = dedupe(
     parsed.skills.map((s) => s.name.trim()).filter(Boolean),
@@ -298,6 +304,7 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
     projects,
     projectKeywords: parsed.projects.map((p) => p.keywords ?? []),
     experience: work,
+    workInitiatives,
     scores: {
       cgpa: edu?.cgpa != null ? String(edu.cgpa) : "",
       twelfth: "",

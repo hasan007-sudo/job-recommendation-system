@@ -20,6 +20,9 @@ export type OnboardingProfile = {
   // LLM-extracted domain skills/tech concepts per project, used for semantic matching.
   projectKeywords: string[][];
   experience: string[];
+  // Per-internship initiative descriptions (what was actually built/delivered).
+  // Pooled with project texts for capability matching so internship work counts.
+  workInitiatives?: string[][];
   scores: { cgpa: string; twelfth: string; tenth: string };
   roleHint: string;
   experienceYears: number;
@@ -36,6 +39,7 @@ export const EMPTY_PROFILE: OnboardingProfile = {
   projects: [],
   projectKeywords: [],
   experience: [],
+  workInitiatives: [],
   scores: { cgpa: "", twelfth: "", tenth: "" },
   roleHint: "",
   experienceYears: 0,
@@ -57,6 +61,11 @@ export function deriveSearchInput(profile: OnboardingProfile): SearchInput {
           .map((kws) => kws.join(", "))
           .filter(Boolean);
 
+  // Internship initiatives are pooled into the same vector set as projects.
+  // The scoring logic already takes MAX cosine per capability across all vectors,
+  // so adding more vectors only helps — the best evidence wins regardless of source.
+  const initiativeTexts = (profile.workInitiatives ?? []).flat().filter(Boolean);
+
   return {
     companyText: "",
     roleText: profile.roleHint,
@@ -65,7 +74,7 @@ export function deriveSearchInput(profile: OnboardingProfile): SearchInput {
       gloss: profile.skillGlosses?.[name],
     })),
     experienceYears: profile.experienceYears,
-    projectTexts,
+    projectTexts: [...projectTexts, ...initiativeTexts],
     sort: "default",
   };
 }
