@@ -23,6 +23,9 @@ Rules:
 - Generate exactly 10 questions that collectively cover all the round's competencies and job context.
 - If candidate background is provided, personalise questions to their skills, projects, and experience level.
 - Questions should sound like real interviewer questions (not generic advice).
+- Each question must be a single, focused sentence — no compound questions and no follow-up prompts appended (never "X? Can you give an example?").
+- Use simple, clear language at a B1 English level — short sentences, everyday words, no idioms or complex phrases. The candidate should be able to understand the question immediately without re-reading it.
+- If the candidate has 0–1 years of experience (fresher or recent graduate), ask questions about attitude, motivation, values, and general scenarios — not questions that assume work experience with clients, teams, or business targets. A fresher should be able to answer from college, personal projects, or daily life. Good fresher question examples: "Why do you want this job?", "How do you handle it when someone says no to you?", "Have you ever tried to convince someone of an idea? What happened?", "Are you comfortable working towards a target every month?".
 - Return only the JSON object, no prose.`;
 
 const Response = z.object({
