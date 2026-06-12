@@ -6,3 +6,4 @@ dist
 coverage
 /graphify-out
 /Resume_upload_analyze
+tsconfig.tsbuildinfo

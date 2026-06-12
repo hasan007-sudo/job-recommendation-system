@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Loader2, X } from "lucide-react";
-import type { OnboardingProfile } from "../lib/onboarding";
+import { buildProjectTexts, type OnboardingProfile } from "../lib/onboarding";
 import type { ParsedRound } from "../lib/rounds";
 import { formatExperience, tierFor } from "../lib/display";
 import { getJson, postJson } from "../lib/api";
@@ -117,19 +117,10 @@ export default function HomePage() {
         if (p.roleHint) setRoleText(p.roleHint);
         if (p.experienceYears != null)
           setExperienceYears(String(p.experienceYears));
-        // Description + keywords per project — same shape deriveSearchInput
-        // builds (descriptions carry the stronger capability-match signal).
-        if (p.projects?.length)
-          setProjectTexts(
-            p.projects.map((proj, i) => {
-              const kws = p.projectKeywords?.[i] ?? [];
-              return kws.length > 0 ? `${proj}. Keywords: ${kws.join(", ")}` : proj;
-            }),
-          );
-        else if (p.projectKeywords?.length)
-          setProjectTexts(
-            p.projectKeywords.map((kws) => kws.join(", ")).filter(Boolean),
-          );
+        // Same project-text shape as deriveSearchInput: prefers the LLM-extracted
+        // capability statements, falls back to description+keywords.
+        const pt = buildProjectTexts(p);
+        if (pt.length > 0) setProjectTexts(pt);
       } catch {
         // ignore
       }

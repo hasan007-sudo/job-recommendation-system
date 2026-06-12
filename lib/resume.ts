@@ -100,7 +100,7 @@ Return ONLY a single JSON object, no prose, matching exactly this shape:
       "graduation_year": number | null, "cgpa": string | null, "is_current": boolean }
   ],
   "skills": [ { "name": string, "gloss": string } ],  // every technical skill, tool, framework, language, AND explicitly listed soft skill; gloss = 8-15 word description expanding acronyms and naming the domain
-  "projects": [ { "name": string, "description": string | null, "keywords": string[] } ],  // side, personal, academic, or open-source projects only; keywords = 3-8 domain skills / tech concepts
+  "projects": [ { "name": string, "description": string | null, "keywords": string[], "capabilities": string[] } ],  // side, personal, academic, or open-source projects only; keywords = 3-8 domain skills / tech concepts; capabilities = 3-5 verb-led statements of what was built/done
   "work_experience": [ { "company": string, "role": string, "initiatives": string[] } ],  // paid employment at a real company only; initiatives = 2-4 one-sentence descriptions of distinct things built or delivered (tools, systems, features, analyses)
   "experience_years": number,    // total full-time work experience in years (0 for students/new grads; internships count as ~0)
   "strongest_domain": string | null  // e.g. "Web Development", "Data Science", "QA Automation"
@@ -113,8 +113,18 @@ Rules:
 - "work_experience initiatives" must describe what was actually built or delivered — concrete systems, tools, analyses, or features, each as one sentence. Exclude soft-skill descriptions ("improved communication"), team sizes, and process words. Extract 2-4 per role; fewer if the resume gives fewer concrete details.
 - "projects" is ONLY side-projects, personal projects, academic/course projects, hackathon work, and open-source contributions. These are NOT employment.
 - Never put a project in "work_experience" and never put a job in "projects". If something has no employing company (e.g. a personal app, a GitHub repo, a college project), it is a project, not work experience.
-- FALLBACK: If the resume contains NO standalone projects at all (no side, personal, academic, hackathon, or open-source projects anywhere), derive 2-4 "projects" entries from the most significant initiatives described in the work experience instead — each a distinct system, feature, or migration the candidate built or led (e.g. a real-time gateway, a platform migration, a data pipeline). Use the initiative as "name", a one-sentence summary of what was built and its impact as "description", and 3-8 keywords. Keep "work_experience" as the normal company/role entries only. Apply this fallback ONLY when "projects" would otherwise be empty.
+- FALLBACK: If the resume contains NO standalone projects at all (no side, personal, academic, hackathon, or open-source projects anywhere), derive 2-4 "projects" entries from the most significant initiatives described in the work experience instead — each a distinct system, feature, or migration the candidate built or led (e.g. a real-time gateway, a platform migration, a data pipeline). Use the initiative as "name", a one-sentence summary of what was built and its impact as "description", 3-8 keywords, and 3-5 capabilities (same verb-led style as above). Keep "work_experience" as the normal company/role entries only. Apply this fallback ONLY when "projects" would otherwise be empty.
 - "project keywords" must be domain skills or tech concepts only (e.g. "real-time systems", "WebSocket", "distributed caching"). Exclude soft skills, team size, awards, and process words.
+- "project capabilities" = 3-5 short, verb-led statements describing what the candidate actually built or did in the project, phrased like job-description responsibilities so they can be matched against them. Each: start with a verb, 4-9 words, no metrics/percentages, no soft skills, no tool-only fragments. Match the style of these real job responsibilities:
+  - "Design and develop software applications"
+  - "Write clean, maintainable code following OOPS principles"
+  - "Design retrieval-augmented generation architectures"
+  - "Validate accuracy, relevance & consistency of AI responses"
+  - "Debug and solve complex performance problems"
+  - "Maintain CRM hygiene and track lead-to-conversion"
+  - "Collaborate with stakeholders on BI requirements"
+  - "Present product demonstrations and proposals"
+  Derive capabilities from the project's own description; never copy the job examples verbatim. If a project genuinely describes no action, use [].
 - "cgpa" is ONLY a numeric grade. Accept formats like "8.44", "3.7", "9.2/10", "72%", or grade classes like "First Class". Reject and set to null anything that describes how the degree was taken or its honours level — for example "Dist." / "Distance" / "Distance Education", "Regular", "Part-time" / "Full-time", "Online" / "Correspondence", "Hons." / "Honours". If the resume shows e.g. "B.E. (Dist.)" with no numeric grade, set cgpa to null and leave the "(Dist.)" out of every field (it is not a score, not a major, not a degree suffix worth keeping).
 - Return only the JSON object.`;
 
@@ -147,6 +157,7 @@ const ParsedResume = z.object({
         name: z.string().nullish(),
         description: z.string().nullish(),
         keywords: z.array(z.string()).default([]),
+        capabilities: z.array(z.string()).default([]),
       }),
     )
     .default([]),
@@ -303,6 +314,7 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
     skillGlosses,
     projects,
     projectKeywords: parsed.projects.map((p) => p.keywords ?? []),
+    projectCapabilities: parsed.projects.map((p) => p.capabilities ?? []),
     experience: work,
     workInitiatives,
     scores: {
@@ -312,25 +324,7 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
     },
     roleHint: parsed.strongest_domain ?? parsed.work_experience[0]?.role ?? "",
     experienceYears: Math.max(0, Math.round(parsed.experience_years ?? 0)),
-    resumeText: buildResumeText(parsed),
   };
-}
-
-function buildResumeText(parsed: ParsedResume): string {
-  const roleHint =
-    parsed.strongest_domain ?? parsed.work_experience[0]?.role ?? "";
-  const skills = dedupe(parsed.skills.map((s) => s.name.trim()).filter(Boolean));
-  const projects = parsed.projects
-    .filter((p) => p.name)
-    .map((p) =>
-      p.description ? `${p.name}: ${p.description}` : (p.name as string),
-    );
-  const work = parsed.work_experience
-    .filter((w) => w.role || w.company)
-    .map((w) => [w.role, w.company].filter(Boolean).join(" at "));
-  return [roleHint, skills.join(", "), work.join(". "), projects.join(". ")]
-    .filter((s) => s && s.trim())
-    .join("\n");
 }
 
 function dedupe(items: string[]): string[] {

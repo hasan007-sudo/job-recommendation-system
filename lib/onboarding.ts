@@ -19,6 +19,11 @@ export type OnboardingProfile = {
   projects: string[];
   // LLM-extracted domain skills/tech concepts per project, used for semantic matching.
   projectKeywords: string[][];
+  // LLM-extracted verb-led capability statements per project ("Built X",
+  // "Designed Y"), shaped like job responsibilities. These are the preferred
+  // embedding units for the project↔JobCapability similarity match — terse
+  // phrases align far better than the full project paragraph.
+  projectCapabilities: string[][];
   experience: string[];
   // Per-internship initiative descriptions (what was actually built/delivered).
   // Pooled with project texts for capability matching so internship work counts.
@@ -26,9 +31,6 @@ export type OnboardingProfile = {
   scores: { cgpa: string; twelfth: string; tenth: string };
   roleHint: string;
   experienceYears: number;
-  // Compact text used as the resume side of the embedding similarity match.
-  // Built at parse time from skills + experience + roleHint.
-  resumeText: string;
 };
 
 export const EMPTY_PROFILE: OnboardingProfile = {
@@ -38,28 +40,37 @@ export const EMPTY_PROFILE: OnboardingProfile = {
   skillGlosses: {},
   projects: [],
   projectKeywords: [],
+  projectCapabilities: [],
   experience: [],
   workInitiatives: [],
   scores: { cgpa: "", twelfth: "", tenth: "" },
   roleHint: "",
   experienceYears: 0,
-  resumeText: "",
 };
+
+// Project evidence units for the embedding match. Preferred: the LLM-extracted
+// per-project capability statements ("Built X", "Designed Y") — terse, verb-led
+// phrases that align with JobCapability rows. Per-project fallback to the older
+// "description. Keywords: …" blob when a project has no capabilities; whole-list
+// fallback to keywords-only for projectless profiles. Shared by deriveSearchInput
+// and the legacy search page so both sides build identical text.
+export function buildProjectTexts(profile: OnboardingProfile): string[] {
+  if ((profile.projects ?? []).length > 0) {
+    return profile.projects.flatMap((p, i) => {
+      const caps = profile.projectCapabilities?.[i] ?? [];
+      if (caps.length > 0) return caps;
+      const kws = profile.projectKeywords?.[i] ?? [];
+      return [kws.length > 0 ? `${p}. Keywords: ${kws.join(", ")}` : p];
+    });
+  }
+  return (profile.projectKeywords ?? [])
+    .map((kws) => kws.join(", "))
+    .filter(Boolean);
+}
 
 // Build the input for the existing job search from an (edited) profile.
 export function deriveSearchInput(profile: OnboardingProfile): SearchInput {
-  // Project evidence text = description + keywords. Descriptions carry the
-  // stronger signal of what was built; keywords sharpen the domain terms.
-  // Pre-keyword profiles fall back to prose-only.
-  const projectTexts =
-    profile.projects.length > 0
-      ? profile.projects.map((p, i) => {
-          const kws = profile.projectKeywords?.[i] ?? [];
-          return kws.length > 0 ? `${p}. Keywords: ${kws.join(", ")}` : p;
-        })
-      : (profile.projectKeywords ?? [])
-          .map((kws) => kws.join(", "))
-          .filter(Boolean);
+  const projectTexts = buildProjectTexts(profile);
 
   // Internship initiatives are pooled into the same vector set as projects.
   // The scoring logic already takes MAX cosine per capability across all vectors,
