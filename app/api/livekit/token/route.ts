@@ -22,7 +22,15 @@ const bodySchema = z.object({
   jobId: z.string().min(1),
   roundSlug: z.string().min(1),
   roundTitle: z.string().min(1),
-  questions: z.array(z.string().min(1)).min(1),
+  questions: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        text: z.string().min(1),
+        question_type: z.array(z.enum(["Language", "Thinking", "Confidence"])),
+      }),
+    )
+    .min(1),
   candidateName: z.string().trim().min(1).optional(),
   jobTitle: z.string().optional(),
   userDetails: z.string().trim().min(1).optional(),

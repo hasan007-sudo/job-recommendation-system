@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ExternalLink, Loader2, Phone, Sparkles } from "lucide-react";
 import type { Round } from "../../../lib/rounds";
+import type { GeneratedQuestion } from "../../../lib/questions";
 import { deriveSearchInput, type OnboardingProfile } from "../../../lib/onboarding";
 import { formatExperience, matchPill, initials } from "../../../lib/display";
 import { getJson, postJson } from "../../../lib/api";
@@ -303,7 +304,7 @@ function RoundItem({
   job: JobDetail["job"];
   profile: OnboardingProfile | null;
 }) {
-  const [questions, setQuestions] = useState<string[] | null>(null);
+  const [questions, setQuestions] = useState<GeneratedQuestion[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -345,9 +346,10 @@ function RoundItem({
     setLoading(true);
     setGenError(null);
     try {
-      const result = await postJson<{ questions?: string[]; error?: string }>(
+      const result = await postJson<{ questions?: GeneratedQuestion[]; error?: string }>(
         `/api/jobs/${job.jobId}/questions`,
         {
+          roundSlug: round.slug,
           roundTitle: round.title,
           competencies: round.competencies,
           jobTitle: job.jobTitle,
@@ -428,11 +430,11 @@ function RoundItem({
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <ol className="space-y-3">
                 {questions.map((q, qi) => (
-                  <li key={qi} className="flex gap-3">
+                  <li key={q.id} className="flex gap-3">
                     <span className="mt-0.5 text-[11px] font-bold tabular-nums text-indigo-500">
                       {String(qi + 1).padStart(2, "0")}
                     </span>
-                    <span className="text-[14px] leading-[1.6] text-slate-700">{q}</span>
+                    <span className="text-[14px] leading-[1.6] text-slate-700">{q.text}</span>
                   </li>
                 ))}
               </ol>

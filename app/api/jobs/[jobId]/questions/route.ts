@@ -3,6 +3,7 @@ import { z } from "zod";
 import { generateRoundQuestions } from "../../../../../lib/questions";
 
 const schema = z.object({
+  roundSlug: z.string(),
   roundTitle: z.string(),
   competencies: z.array(z.string()).default([]),
   jobTitle: z.string(),
