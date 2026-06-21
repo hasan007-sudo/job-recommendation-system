@@ -40,7 +40,8 @@ describe("role-only search", () => {
       roleText: "Software Engineer",
       companyText: "",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toHaveLength(1);
@@ -61,7 +62,8 @@ describe("role-only search", () => {
       roleText: "Softwre Enginer", // intentional typo
       companyText: "",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toHaveLength(1);
@@ -81,7 +83,8 @@ describe("role-only search", () => {
       roleText: "SDE",
       companyText: "",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toHaveLength(1);
@@ -101,7 +104,8 @@ describe("role-only search", () => {
       roleText: "Software Engineer",
       companyText: "",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(embed).toHaveBeenCalledOnce();
@@ -120,7 +124,8 @@ describe("role-only search", () => {
       roleText: "Frontend Engineer",
       companyText: "",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(q()).toHaveBeenCalledTimes(4);

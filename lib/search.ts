@@ -153,7 +153,8 @@ export type SearchInput = {
   companyText: string;
   roleText: string;
   skills: SkillQuery[];
-  experienceYears: number | null;
+  experienceMinYears: number | null;
+  experienceMaxYears: number | null;
   // Per-project evidence strings (description + keywords). Each is embedded and
   // compared against JobCapability vectors.
   projectTexts?: string[];
@@ -287,16 +288,19 @@ async function resolveCoveredSkillIds(skills: SkillQuery[]): Promise<string[]> {
 // without it the cap would keep arbitrary low-coverage jobs.
 async function matchSkillJobIds(
   coveredSkillIds: string[],
-  experienceYears: number | null,
+  experienceMinYears: number | null,
+  experienceMaxYears: number | null,
 ): Promise<string[]> {
   if (coveredSkillIds.length === 0) return [];
   const rows = await prisma.$queryRaw<{ jobId: string }[]>`
     SELECT js."jobId"
     FROM "JobSkill" js
     JOIN "Job" j ON j.id = js."jobId"
-    WHERE ${experienceYears}::int IS NULL
-       OR ${experienceYears}::int BETWEEN COALESCE(j."experienceMinYears", 0)
-                                      AND COALESCE(j."experienceMaxYears", 99)
+    WHERE (${experienceMinYears}::int IS NULL AND ${experienceMaxYears}::int IS NULL)
+       OR (
+         COALESCE(${experienceMinYears}::int, 0) <= COALESCE(j."experienceMaxYears", 99)
+         AND COALESCE(${experienceMaxYears}::int, 99) >= COALESCE(j."experienceMinYears", 0)
+       )
     GROUP BY js."jobId"
     HAVING COUNT(*) FILTER (WHERE js."skillId" = ANY(${coveredSkillIds}::text[])) > 0
     ORDER BY COUNT(*) FILTER (WHERE js."skillId" = ANY(${coveredSkillIds}::text[]))::float / COUNT(*) DESC
@@ -413,7 +417,7 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
   const [titleIds, companyIds, skillJobIds, projectJobIds] = await Promise.all([
     input.roleText ? matchTitleIds(input.roleText) : Promise.resolve([] as string[]),
     input.companyText ? matchCompanyIds(input.companyText) : Promise.resolve([] as string[]),
-    matchSkillJobIds(coveredSkillIds, input.experienceYears),
+    matchSkillJobIds(coveredSkillIds, input.experienceMinYears, input.experienceMaxYears),
     matchProjectJobIds(projVecLits),
   ]);
 
@@ -456,9 +460,11 @@ export async function searchJobs(input: SearchInput): Promise<JobCard[]> {
       JOIN "Company" c ON c.id = j."companyId"
       ${scoringLaterals(coveredSkillIds, projVecLits)}
       WHERE (
-          ${input.experienceYears}::int IS NULL
-          OR ${input.experienceYears}::int BETWEEN COALESCE(j."experienceMinYears", 0)
-                                               AND COALESCE(j."experienceMaxYears", 99)
+          (${input.experienceMinYears}::int IS NULL AND ${input.experienceMaxYears}::int IS NULL)
+          OR (
+            COALESCE(${input.experienceMinYears}::int, 0) <= COALESCE(j."experienceMaxYears", 99)
+            AND COALESCE(${input.experienceMaxYears}::int, 99) >= COALESCE(j."experienceMinYears", 0)
+          )
         )
         AND (
           (cardinality(${companyIds}::text[]) > 0 AND j."companyId" = ANY(${companyIds}::text[]))

@@ -11,7 +11,8 @@ const schema = z.object({
     .array(z.object({ name: z.string(), gloss: z.string().nullish() }))
     .default([]),
   skillNames: z.array(z.string()).default([]),
-  experienceYears: z.number().int().min(0).max(60).nullable().default(null),
+  experienceMinYears: z.number().int().min(0).max(60).nullable().default(null),
+  experienceMaxYears: z.number().int().min(0).max(60).nullable().default(null),
   projectTexts: z.array(z.string()).default([]),
   sort: z.enum(["default", "score"]).default("default"),
 });

@@ -36,18 +36,11 @@ type SearchInput = {
   // Skills with their parse-time glosses (embedding input for semantic
   // coverage). Manually typed skills have no gloss → exact token match only.
   skills: { name: string; gloss?: string }[];
-  experienceYears: number | null;
+  experienceMinYears: number | null;
+  experienceMaxYears: number | null;
   projectTexts: string[];
   sort: SortMode;
 };
-
-const EXP_OPTIONS: { label: string; value: string }[] = [
-  { label: "Any", value: "" },
-  { label: "0–2 yrs", value: "1" },
-  { label: "3–5 yrs", value: "4" },
-  { label: "6–8 yrs", value: "7" },
-  { label: "8+ yrs", value: "9" },
-];
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -65,7 +58,8 @@ export default function HomePage() {
   const [skillSearch, setSkillSearch] = useState("");
   const [roleText, setRoleText] = useState<string>("");
   const [companyText, setCompanyText] = useState<string>("");
-  const [experienceYears, setExperienceYears] = useState<string>("");
+  const [experienceMin, setExperienceMin] = useState<string>("");
+  const [experienceMax, setExperienceMax] = useState<string>("");
   const [projectTexts, setProjectTexts] = useState<string[]>([]);
   const [sort, setSort] = useState<SortMode>("default");
   // The committed search input that drives the query. Only changes on "Update
@@ -115,8 +109,10 @@ export default function HomePage() {
         profileSkills = p.skills ?? null;
         if (p.skillGlosses) setSkillGlosses(p.skillGlosses);
         if (p.roleHint) setRoleText(p.roleHint);
-        if (p.experienceYears != null)
-          setExperienceYears(String(p.experienceYears));
+        if (p.experienceMinYears != null)
+          setExperienceMin(String(p.experienceMinYears));
+        if (p.experienceMaxYears != null)
+          setExperienceMax(String(p.experienceMaxYears));
         // Same project-text shape as deriveSearchInput: prefers the LLM-extracted
         // capability statements, falls back to description+keywords.
         const pt = buildProjectTexts(p);
@@ -154,11 +150,16 @@ export default function HomePage() {
         }));
         setProjectTexts(autoProjectTexts);
         setSort(autoSort);
+        const autoMin = input.experienceMinYears ?? null;
+        const autoMax = input.experienceMaxYears ?? null;
+        setExperienceMin(autoMin == null ? "" : String(autoMin));
+        setExperienceMax(autoMax == null ? "" : String(autoMax));
         runSearch({
           companyText: "",
           roleText: input.roleText ?? "",
           skills: autoSkills,
-          experienceYears: input.experienceYears ?? null,
+          experienceMinYears: autoMin,
+          experienceMaxYears: autoMax,
           projectTexts: autoProjectTexts,
           sort: autoSort,
         });
@@ -185,8 +186,15 @@ export default function HomePage() {
               .map((s) => [s.name, s.gloss!]),
           ),
         }));
-        setExperienceYears(
-          input.experienceYears == null ? "" : String(input.experienceYears),
+        setExperienceMin(
+          input.experienceMinYears == null
+            ? ""
+            : String(input.experienceMinYears),
+        );
+        setExperienceMax(
+          input.experienceMaxYears == null
+            ? ""
+            : String(input.experienceMaxYears),
         );
         setProjectTexts(input.projectTexts ?? []);
         setSort(input.sort === "score" ? "score" : "default");
@@ -235,7 +243,8 @@ export default function HomePage() {
       companyText,
       roleText,
       skills: buildSkills(),
-      experienceYears: experienceYears === "" ? null : Number(experienceYears),
+      experienceMinYears: experienceMin === "" ? null : Number(experienceMin),
+      experienceMaxYears: experienceMax === "" ? null : Number(experienceMax),
       projectTexts,
       sort,
     });
@@ -249,7 +258,8 @@ export default function HomePage() {
       companyText,
       roleText,
       skills: buildSkills(),
-      experienceYears: experienceYears === "" ? null : Number(experienceYears),
+      experienceMinYears: experienceMin === "" ? null : Number(experienceMin),
+      experienceMaxYears: experienceMax === "" ? null : Number(experienceMax),
       projectTexts,
       sort: next,
     });
@@ -308,25 +318,24 @@ export default function HomePage() {
               </Field>
 
               <Field label="Years of experience">
-                <div className="relative">
-                  <select
-                    value={experienceYears}
-                    onChange={(e) => setExperienceYears(e.target.value)}
-                    className="h-11 w-full appearance-none rounded-lg border border-slate-200 bg-white px-3 pr-9 text-[14px] text-slate-900 outline-none focus:border-indigo-500"
-                  >
-                    {EXP_OPTIONS.map((o) => (
-                      <option key={o.label} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                  <svg
-                    className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 111.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" />
-                  </svg>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    value={experienceMin}
+                    onChange={(e) => setExperienceMin(e.target.value)}
+                    placeholder="Min"
+                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[14px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
+                  />
+                  <span className="text-[14px] text-slate-400">–</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={experienceMax}
+                    onChange={(e) => setExperienceMax(e.target.value)}
+                    placeholder="Max"
+                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[14px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
+                  />
                 </div>
               </Field>
 

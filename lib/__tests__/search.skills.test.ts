@@ -42,7 +42,8 @@ describe("skills-only search", () => {
       roleText: "",
       companyText: "",
       skills: [{ name: "React" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toHaveLength(1);
@@ -65,7 +66,8 @@ describe("skills-only search", () => {
       roleText: "",
       companyText: "",
       skills: [{ name: "AWS", gloss: "AWS (Amazon Web Services): cloud computing platform" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(embed).toHaveBeenCalledWith(
@@ -80,7 +82,8 @@ describe("skills-only search", () => {
       roleText: "",
       companyText: "",
       skills: [{ name: "  " }, { name: "" }, { name: "\t" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toEqual([]);
@@ -102,7 +105,8 @@ describe("skills-only search", () => {
       roleText: "",
       companyText: "",
       skills: [{ name: "React" }, { name: "TypeScript" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result[0]!.jobId).toBe("job-2");

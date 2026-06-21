@@ -33,7 +33,8 @@ async function searchWithRow(rowOverrides: Parameters<typeof makeRow>[0]) {
     roleText: "Engineer",
     companyText: "",
     skills: [],
-    experienceYears: null,
+    experienceMinYears: null,
+      experienceMaxYears: null,
   });
 }
 

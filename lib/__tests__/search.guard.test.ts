@@ -29,7 +29,8 @@ describe("empty-query guard", () => {
       companyText: "",
       roleText: "",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toEqual([]);
@@ -49,7 +50,8 @@ describe("empty-query guard", () => {
       companyText: "",
       roleText: "Nonexistent Role XYZ",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toEqual([]);
@@ -64,7 +66,8 @@ describe("empty-query guard", () => {
       companyText: "",
       roleText: "",
       skills: [{ name: "  " }, { name: "" }, { name: "\t" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toEqual([]);

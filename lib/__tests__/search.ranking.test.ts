@@ -46,7 +46,8 @@ describe("ranking order", () => {
       roleText: "Engineer",
       companyText: "",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result[0]!.jobId).toBe("job-a");
@@ -66,7 +67,8 @@ describe("ranking order", () => {
       roleText: "Engineer",
       companyText: "",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toHaveLength(2);
@@ -82,7 +84,8 @@ describe("ranking order", () => {
       roleText: "Engineer",
       companyText: "",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result[0]!.score).toBe(75);

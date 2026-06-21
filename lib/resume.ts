@@ -323,7 +323,8 @@ function mapToProfile(parsed: ParsedResume): OnboardingProfile {
       tenth: "",
     },
     roleHint: parsed.strongest_domain ?? parsed.work_experience[0]?.role ?? "",
-    experienceYears: Math.max(0, Math.round(parsed.experience_years ?? 0)),
+    experienceMinYears: 0,
+    experienceMaxYears: Math.max(0, Math.round(parsed.experience_years ?? 0)),
   };
 }
 

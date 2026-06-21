@@ -4,8 +4,8 @@ import type { SearchInput } from "./search";
 // extraction + LLM code lives in ./resume and is used only by the API route.
 
 // Profile shown on the onboarding edit screen. Mirrors the wireframe sections.
-// `roleHint` / `experienceYears` are derived at parse time and carried through
-// to drive the existing job search; they are not edited in the UI.
+// `roleHint` is derived at parse time; the experience range is seeded from the
+// parse ([0, N]) and editable in the UI. All drive the existing job search.
 export type OnboardingProfile = {
   name: string;
   education: { degree: string; major: string; institution: string; years: string; standing: string };
@@ -30,7 +30,8 @@ export type OnboardingProfile = {
   workInitiatives?: string[][];
   scores: { cgpa: string; twelfth: string; tenth: string };
   roleHint: string;
-  experienceYears: number;
+  experienceMinYears: number;
+  experienceMaxYears: number;
 };
 
 export const EMPTY_PROFILE: OnboardingProfile = {
@@ -45,7 +46,8 @@ export const EMPTY_PROFILE: OnboardingProfile = {
   workInitiatives: [],
   scores: { cgpa: "", twelfth: "", tenth: "" },
   roleHint: "",
-  experienceYears: 0,
+  experienceMinYears: 0,
+  experienceMaxYears: 0,
 };
 
 // Project evidence units for the embedding match. Preferred: the LLM-extracted
@@ -84,7 +86,8 @@ export function deriveSearchInput(profile: OnboardingProfile): SearchInput {
       name,
       gloss: profile.skillGlosses?.[name],
     })),
-    experienceYears: profile.experienceYears,
+    experienceMinYears: profile.experienceMinYears,
+    experienceMaxYears: profile.experienceMaxYears,
     projectTexts: [...projectTexts, ...initiativeTexts],
     sort: "default",
   };

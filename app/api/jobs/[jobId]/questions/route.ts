@@ -12,7 +12,8 @@ const schema = z.object({
   candidateSkills: z.array(z.string()).optional(),
   candidateExperience: z.array(z.string()).optional(),
   candidateProjects: z.array(z.string()).optional(),
-  experienceYears: z.number().optional(),
+  experienceMinYears: z.number().optional(),
+  experienceMaxYears: z.number().optional(),
 });
 
 export async function POST(request: Request) {

@@ -37,7 +37,8 @@ describe("company-only search", () => {
       roleText: "",
       companyText: "Google",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toHaveLength(1);
@@ -58,7 +59,8 @@ describe("company-only search", () => {
       roleText: "",
       companyText: "Googl", // partial / typo
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toHaveLength(1);
@@ -75,7 +77,8 @@ describe("company-only search", () => {
       roleText: "",
       companyText: "Ggl",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toEqual([]);
@@ -93,7 +96,8 @@ describe("company-only search", () => {
       roleText: "",
       companyText: "Unknown Corp XYZ",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toEqual([]);
@@ -109,7 +113,8 @@ describe("company-only search", () => {
       roleText: "",
       companyText: "Acme",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(q()).toHaveBeenCalledTimes(2);

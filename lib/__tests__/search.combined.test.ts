@@ -59,7 +59,8 @@ describe("role + company", () => {
       roleText: "Engineer",
       companyText: "Google",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toHaveLength(1);
@@ -81,7 +82,8 @@ describe("role + company", () => {
       roleText: "Engineer",
       companyText: "Acme",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(q()).toHaveBeenCalledTimes(5);
@@ -104,7 +106,8 @@ describe("role + skills", () => {
       roleText: "Frontend Engineer",
       companyText: "",
       skills: [{ name: "React" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(q()).toHaveBeenCalledTimes(6);
@@ -115,8 +118,8 @@ describe("role + skills", () => {
 });
 
 describe("role + experience", () => {
-  it("does not apply an experience filter when experienceYears is null", async () => {
-    // experienceYears=null → the BETWEEN predicate is skipped in SQL. JS-side this
+  it("does not apply an experience filter when both range bounds are null", async () => {
+    // min=max=null → the overlap predicate is skipped in SQL. JS-side this
     // is just a passthrough path; verify it still runs the role-only call sequence.
     q()
       .mockResolvedValueOnce([makeMatch("job-1", 1.0)])
@@ -128,7 +131,8 @@ describe("role + experience", () => {
       roleText: "Software Engineer",
       companyText: "",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toHaveLength(1);
@@ -153,7 +157,8 @@ describe("all four inputs combined", () => {
       roleText: "Software Engineer",
       companyText: "Acme",
       skills: [{ name: "React" }, { name: "TypeScript" }],
-      experienceYears: 3,
+      experienceMinYears: 3,
+      experienceMaxYears: 3,
     });
 
     expect(q()).toHaveBeenCalledTimes(7);

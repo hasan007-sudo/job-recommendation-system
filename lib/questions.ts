@@ -12,7 +12,8 @@ export type QuestionInput = {
   candidateSkills?: string[];
   candidateExperience?: string[];
   candidateProjects?: string[];
-  experienceYears?: number;
+  experienceMinYears?: number;
+  experienceMaxYears?: number;
 };
 
 // Single question shape shared with the LiveKit agent. The agent reads
@@ -82,8 +83,17 @@ export async function generateRoundQuestions(
       lines.push(`- Experience: ${input.candidateExperience.join("; ")}`);
     if (input.candidateProjects?.length)
       lines.push(`- Projects: ${input.candidateProjects.join("; ")}`);
-    if (typeof input.experienceYears === "number")
-      lines.push(`- Years of experience: ${input.experienceYears}`);
+    if (
+      typeof input.experienceMinYears === "number" &&
+      typeof input.experienceMaxYears === "number"
+    )
+      lines.push(
+        `- Years of experience: ${input.experienceMinYears}–${input.experienceMaxYears}`,
+      );
+    else if (typeof input.experienceMinYears === "number")
+      lines.push(`- Years of experience: ${input.experienceMinYears}+`);
+    else if (typeof input.experienceMaxYears === "number")
+      lines.push(`- Years of experience: up to ${input.experienceMaxYears}`);
   }
 
   const res = await fetch(OPENROUTER_URL, {

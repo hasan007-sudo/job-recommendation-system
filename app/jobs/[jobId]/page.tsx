@@ -3,9 +3,20 @@
 import { use, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ExternalLink, Loader2, Phone, Sparkles } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  ExternalLink,
+  Loader2,
+  Phone,
+  Sparkles,
+  XCircle,
+} from "lucide-react";
 import type { Round } from "../../../lib/rounds";
 import type { GeneratedQuestion } from "../../../lib/questions";
+import type { JobFitAnalysis } from "../../../lib/job-fit";
 import { deriveSearchInput, type OnboardingProfile } from "../../../lib/onboarding";
 import { formatExperience, matchPill, initials } from "../../../lib/display";
 import { getJson, postJson } from "../../../lib/api";
@@ -51,9 +62,10 @@ function buildUserDetails(
   const major = profile.education.major.trim();
   const degreePhrase = degree ? `a ${degree}${major ? ` in ${major}` : ""}` : "";
 
+  const expYears = profile.experienceMaxYears;
   const experiencePhrase =
-    profile.experienceYears > 0
-      ? `${profile.experienceYears} year${profile.experienceYears === 1 ? "" : "s"} of experience`
+    expYears > 0
+      ? `${expYears} year${expYears === 1 ? "" : "s"} of experience`
       : "a fresher";
 
   const targetPhrase = `the ${job.jobTitle} role at ${job.companyName}`;
@@ -93,6 +105,41 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
   const matchPercent = matchData?.match?.score ?? undefined;
   const skillsPct = matchData?.match?.skillsPct ?? undefined;
   const projectsPct = matchData?.match?.projectsPct ?? undefined;
+
+  // One LLM call analyzes skills + requirements + responsibilities + nice-to-haves
+  // against the resume, anchored by our match scores so the LLM's verdicts don't
+  // drift from the engine. Runs once the match resolves (cached per job+profile).
+  const {
+    data: analysisData,
+    isLoading: analysisLoading,
+    error: analysisError,
+  } = useQuery({
+    queryKey: [
+      "job-analysis",
+      jobId,
+      profile?.skills,
+      profile?.projects,
+      profile?.experience,
+      matchPercent,
+      skillsPct,
+      projectsPct,
+    ],
+    enabled: !!profile && matchData !== undefined,
+    queryFn: () =>
+      postJson<{ analysis?: JobFitAnalysis }>(`/api/jobs/${jobId}/analysis`, {
+        candidateSkills: profile!.skills,
+        candidateExperience: profile!.experience,
+        candidateProjects: profile!.projects,
+        candidateInitiatives: (profile!.workInitiatives ?? []).flat().filter(Boolean),
+        experienceMinYears: profile!.experienceMinYears,
+        experienceMaxYears: profile!.experienceMaxYears,
+        overallPct: matchPercent ?? null,
+        skillsPct: skillsPct ?? null,
+        projectsPct: projectsPct ?? null,
+      }),
+  });
+  const analysis = analysisData?.analysis;
+  const analysisErr = analysisError instanceof Error ? analysisError.message : null;
 
   useEffect(() => {
     try {
@@ -139,6 +186,9 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
             matchPercent={matchPercent}
             skillsPct={skillsPct}
             projectsPct={projectsPct}
+            analysis={analysis}
+            analysisLoading={analysisLoading}
+            analysisError={analysisErr}
             profile={profile}
           />
         )}
@@ -152,12 +202,18 @@ function JobDetailView({
   matchPercent,
   skillsPct,
   projectsPct,
+  analysis,
+  analysisLoading,
+  analysisError,
   profile,
 }: {
   detail: JobDetail;
   matchPercent: number | undefined;
   skillsPct: number | undefined;
   projectsPct: number | undefined;
+  analysis: JobFitAnalysis | undefined;
+  analysisLoading: boolean;
+  analysisError: string | null;
   profile: OnboardingProfile | null;
 }) {
   const { job } = detail;
@@ -228,22 +284,31 @@ function JobDetailView({
         )}
       </section>
 
-      {skills.length > 0 && (
-        <div className="border-t border-slate-200 p-8 sm:p-10">
-          <h2 className="mb-6 text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
-            Required skills
-          </h2>
-          <div className="flex flex-wrap gap-2">
-            {skills.map((s, i) => (
-              <span
-                key={i}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-medium text-slate-700"
-              >
-                {s}
-              </span>
-            ))}
+      {profile ? (
+        <JobFitSections
+          analysis={analysis}
+          loading={analysisLoading}
+          error={analysisError}
+          fallbackSkills={skills}
+        />
+      ) : (
+        skills.length > 0 && (
+          <div className="border-t border-slate-200 p-8 sm:p-10">
+            <h2 className="mb-6 text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
+              Required skills
+            </h2>
+            <div className="flex flex-wrap gap-2">
+              {skills.map((s, i) => (
+                <span
+                  key={i}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-medium text-slate-700"
+                >
+                  {s}
+                </span>
+              ))}
+            </div>
           </div>
-        </div>
+        )
       )}
 
       <div className="border-t border-slate-200 bg-slate-50 p-8 sm:p-10">
@@ -261,6 +326,150 @@ function JobDetailView({
         </div>
       )}
     </div>
+  );
+}
+
+function coverageTint(pct: number): string {
+  if (pct >= 80) return "bg-emerald-50 text-emerald-700";
+  if (pct >= 60) return "bg-amber-50 text-amber-700";
+  return "bg-rose-50 text-rose-700";
+}
+
+// Skills chips + the three fit accordions (Requirements / Responsibilities /
+// Nice to haves), all driven by the single analysis call. While it loads we show
+// the JD's required skills as plain chips so the section never looks empty.
+function JobFitSections({
+  analysis,
+  loading,
+  error,
+  fallbackSkills,
+}: {
+  analysis: JobFitAnalysis | undefined;
+  loading: boolean;
+  error: string | null;
+  fallbackSkills: string[];
+}) {
+  const skills =
+    analysis?.skills ?? fallbackSkills.map((skill) => ({ skill, matched: false }));
+
+  return (
+    <>
+      {skills.length > 0 && (
+        <div className="border-t border-slate-200 p-8 sm:p-10">
+          <h2 className="mb-6 text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
+            Skills
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {skills.map((s, i) => (
+              <span
+                key={i}
+                className={
+                  "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[13px] font-medium " +
+                  (s.matched
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-slate-200 bg-white text-slate-700")
+                }
+              >
+                {s.matched && <Check size={13} strokeWidth={3} className="text-emerald-500" />}
+                {s.skill}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {loading && (
+        <div className="border-t border-slate-200 p-8 sm:p-10">
+          <p className="flex items-center gap-2 text-[13px] font-semibold text-slate-500">
+            <Loader2 size={15} className="animate-spin" /> Analyzing your resume against this role…
+          </p>
+        </div>
+      )}
+
+      {error && !loading && (
+        <div className="border-t border-slate-200 p-8 sm:p-10">
+          <p className="text-[13px] text-rose-600">{error}</p>
+        </div>
+      )}
+
+      {analysis && !loading && (
+        <>
+          <FitAccordion title="Requirements" section={analysis.requirements} defaultOpen />
+          <FitAccordion title="Responsibilities" section={analysis.responsibilities} />
+          <FitAccordion title="Nice to haves" section={analysis.niceToHaves} />
+        </>
+      )}
+    </>
+  );
+}
+
+function FitAccordion({
+  title,
+  section,
+  defaultOpen = false,
+}: {
+  title: string;
+  section: JobFitAnalysis["requirements"];
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  if (section.items.length === 0) return null;
+
+  return (
+    <div className="border-t border-slate-200">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-4 px-8 py-7 text-left hover:bg-slate-50 sm:px-10"
+      >
+        <h2 className="text-[15px] font-bold tracking-tight text-slate-900">{title}</h2>
+        <div className="flex items-center gap-3">
+          <span
+            className={
+              "rounded-lg px-2.5 py-1 text-[14px] font-bold tabular-nums " +
+              coverageTint(section.coveragePct)
+            }
+          >
+            {section.coveragePct}%
+          </span>
+          <ChevronDown
+            size={18}
+            className={"text-slate-400 transition-transform " + (open ? "rotate-180" : "")}
+          />
+        </div>
+      </button>
+      {open && (
+        <ul className="space-y-6 px-8 pb-8 sm:px-10">
+          {section.items.map((item, i) => (
+            <FitRow key={i} item={item} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function FitRow({ item }: { item: JobFitAnalysis["requirements"]["items"][number] }) {
+  const found = item.status === "found";
+  return (
+    <li className="border-l-2 border-slate-100 pl-5">
+      <div className="flex items-start gap-3">
+        {found ? (
+          <CheckCircle2 size={20} className="mt-0.5 shrink-0 text-emerald-500" />
+        ) : (
+          <XCircle size={20} className="mt-0.5 shrink-0 text-rose-400" />
+        )}
+        <p className="text-[15px] font-semibold leading-snug text-slate-900">{item.text}</p>
+      </div>
+      <div
+        className={
+          "ml-8 mt-3 rounded-xl px-4 py-3 text-[13.5px] leading-[1.6] " +
+          (found ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800")
+        }
+      >
+        <span className="font-bold">{found ? "✓ Found: " : "→ Add: "}</span>
+        {item.note}
+      </div>
+    </li>
   );
 }
 
@@ -360,7 +569,8 @@ function RoundItem({
                 candidateSkills: profile.skills,
                 candidateExperience: profile.experience,
                 candidateProjects: profile.projects,
-                experienceYears: profile.experienceYears,
+                experienceMinYears: profile.experienceMinYears,
+                experienceMaxYears: profile.experienceMaxYears,
               }
             : {}),
         },

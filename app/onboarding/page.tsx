@@ -273,6 +273,28 @@ function ProfileStep({
           </FieldRow>
         </Card>
 
+        <Card title="Experience">
+          <FieldRow label="Years of experience">
+            <div className="flex items-center gap-3">
+              <NumberInput
+                value={profile.experienceMinYears}
+                placeholder="Min"
+                onChange={(v) =>
+                  setProfile((p) => ({ ...p, experienceMinYears: v }))
+                }
+              />
+              <span className="text-[15px] text-slate-400">–</span>
+              <NumberInput
+                value={profile.experienceMaxYears}
+                placeholder="Max"
+                onChange={(v) =>
+                  setProfile((p) => ({ ...p, experienceMaxYears: v }))
+                }
+              />
+            </div>
+          </FieldRow>
+        </Card>
+
         <Card title="Education">
           <div className="grid grid-cols-2 gap-x-5 gap-y-5">
             <FieldRow label="Degree">
@@ -480,6 +502,27 @@ function UnderlineInput({
         "block w-full border-0 border-b border-slate-200 bg-transparent pb-1.5 outline-none focus:border-indigo-500 " +
         (big ? "text-[20px] font-bold" : "text-[15px] font-semibold")
       }
+    />
+  );
+}
+
+function NumberInput({
+  value,
+  placeholder,
+  onChange,
+}: {
+  value: number;
+  placeholder?: string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <input
+      type="number"
+      min={0}
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onChange(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+      className="block w-full border-0 border-b border-slate-200 bg-transparent pb-1.5 text-[15px] font-semibold outline-none focus:border-indigo-500"
     />
   );
 }

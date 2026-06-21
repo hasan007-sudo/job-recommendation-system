@@ -74,7 +74,8 @@ describe("skill coverage score", () => {
       roleText: "",
       companyText: "",
       skills: [{ name: "React" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(card.skillsPct).toBe(100);
@@ -96,7 +97,8 @@ describe("skill coverage score", () => {
       roleText: "",
       companyText: "",
       skills: [{ name: "React" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(card.totalSkills).toBe(5);
@@ -115,7 +117,8 @@ describe("skill coverage score", () => {
       roleText: "",
       companyText: "Acme",
       skills: [{ name: "React" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(card.totalSkills).toBe(0);
@@ -138,7 +141,8 @@ describe("semantic skill coverage", () => {
       roleText: "",
       companyText: "",
       skills: [{ name: "k8s", gloss: "container orchestration" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(card.matchedSkills).toBe(1);
@@ -158,7 +162,8 @@ describe("semantic skill coverage", () => {
       roleText: "",
       companyText: "",
       skills: [{ name: "k8s", gloss: "unrelated thing" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
     });
 
     expect(result).toEqual([]); // nothing covered → no skill path → guard returns []
@@ -178,7 +183,8 @@ describe("project evidence score", () => {
       roleText: "",
       companyText: "Acme",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
       projectTexts: ["proj"],
     });
     return card.projectsPct;
@@ -202,7 +208,8 @@ describe("project evidence score", () => {
       roleText: "",
       companyText: "Acme",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
       projectTexts: ["proj"],
     });
 
@@ -225,7 +232,8 @@ describe("project evidence score", () => {
       roleText: "",
       companyText: "Acme",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
       projectTexts: ["proj"],
     });
 
@@ -242,7 +250,8 @@ describe("project evidence score", () => {
       roleText: "",
       companyText: "Acme",
       skills: [],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
       projectTexts: ["low", "high"],
     });
 
@@ -266,7 +275,8 @@ describe("blended score", () => {
       roleText: "",
       companyText: "",
       skills: [{ name: "React" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
       projectTexts: ["proj"],
     });
 
@@ -292,7 +302,8 @@ describe("blended score", () => {
       roleText: "",
       companyText: "",
       skills: [{ name: "React" }, { name: "Vue" }, { name: "Angular" }],
-      experienceYears: null,
+      experienceMinYears: null,
+      experienceMaxYears: null,
       projectTexts: ["proj"],
     });
 
@@ -312,9 +323,9 @@ describe("experience hard filter", () => {
     await seedJob(prisma, company, { title: "Open Band", skillIds: [react], experienceMinYears: null, experienceMaxYears: null });
   });
 
-  it("excludes jobs whose band does not contain experienceYears", async () => {
+  it("excludes jobs whose band does not overlap the candidate range", async () => {
     const titles = (
-      await searchJobs({ roleText: "", companyText: "", skills: [{ name: "React" }], experienceYears: 3 })
+      await searchJobs({ roleText: "", companyText: "", skills: [{ name: "React" }], experienceMinYears: 3, experienceMaxYears: 3 })
     ).map((c) => c.jobTitle);
 
     expect(titles).toContain("In Band");
@@ -322,8 +333,8 @@ describe("experience hard filter", () => {
     expect(titles).not.toContain("Out Of Band");
   });
 
-  it("applies no experience filter when experienceYears is null", async () => {
-    const cards = await searchJobs({ roleText: "", companyText: "", skills: [{ name: "React" }], experienceYears: null });
+  it("applies no experience filter when both range bounds are null", async () => {
+    const cards = await searchJobs({ roleText: "", companyText: "", skills: [{ name: "React" }], experienceMinYears: null, experienceMaxYears: null });
     expect(cards).toHaveLength(3);
   });
 });
@@ -357,14 +368,16 @@ describe("tier ordering and sort modes", () => {
 
   it("default sort orders company → role → skill regardless of score", async () => {
     const titles = (
-      await searchJobs({ roleText: "Bravo", companyText: "Acme", skills: allSkills, experienceYears: null, sort: "default" })
+      await searchJobs({ roleText: "Bravo", companyText: "Acme", skills: allSkills, experienceMinYears: null,
+      experienceMaxYears: null, sort: "default" })
     ).map((c) => c.jobTitle);
 
     expect(titles).toEqual(["Alpha", "Bravo", "Charlie"]);
   });
 
   it("score sort orders by matchScore, ignoring tier", async () => {
-    const cards = await searchJobs({ roleText: "Bravo", companyText: "Acme", skills: allSkills, experienceYears: null, sort: "score" });
+    const cards = await searchJobs({ roleText: "Bravo", companyText: "Acme", skills: allSkills, experienceMinYears: null,
+      experienceMaxYears: null, sort: "score" });
 
     expect(cards.map((c) => c.jobTitle)).toEqual(["Charlie", "Bravo", "Alpha"]);
     expect(cards.map((c) => c.score)).toEqual([65, 39, 13]);
@@ -379,7 +392,7 @@ describe("tie-break", () => {
     await seedJob(prisma, company, { title: "Newer", skillIds: [react], createdAt: new Date("2024-02-01") });
     await seedJob(prisma, company, { title: "Older", skillIds: [react], createdAt: new Date("2024-01-01") });
 
-    const cards = await searchJobs({ roleText: "", companyText: "", skills: [{ name: "React" }], experienceYears: null });
+    const cards = await searchJobs({ roleText: "", companyText: "", skills: [{ name: "React" }], experienceMinYears: null, experienceMaxYears: null });
 
     expect(cards.map((c) => c.jobTitle)).toEqual(["Older", "Newer"]);
     expect(cards.every((c) => c.score === 65)).toBe(true);
