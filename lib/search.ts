@@ -117,7 +117,7 @@ async function matchTitleIds(text: string): Promise<string[]> {
 }
 
 // Company candidates: exact then trigram. No vector — company names are typed near-exact.
-async function matchCompanyIds(text: string): Promise<string[]> {
+async function matchCompanyNameIds(text: string): Promise<string[]> {
   const norm = normalize(text);
   if (!norm) return [];
 
@@ -139,6 +139,16 @@ async function matchCompanyIds(text: string): Promise<string[]> {
     return trigram.map((r) => r.id);
   }
   return [];
+}
+
+async function matchCompanyIds(text: string): Promise<string[]> {
+  const companyNames = text
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+
+  const matches = await Promise.all(companyNames.map(matchCompanyNameIds));
+  return [...new Set(matches.flat())];
 }
 
 export type SortMode = "default" | "score";

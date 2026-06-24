@@ -32,8 +32,8 @@ export type JobFitInput = {
 };
 
 export type FitStatus = "found" | "missing";
-export type FitItem = { text: string; status: FitStatus; note: string };
-export type FitSection = { items: FitItem[]; coveragePct: number };
+export type FitItem = { text: string; status: FitStatus };
+export type FitSection = { items: FitItem[] };
 export type SkillChip = { skill: string; matched: boolean };
 
 export type JobFitAnalysis = {
@@ -56,24 +56,25 @@ Produce four things:
 For every item in requirements, responsibilities, and niceToHaves, decide a "status":
 - "found": the resume shows concrete evidence (a project, internship, role, skill, or coursework) that genuinely supports it.
 - "missing": no real evidence.
-And write a "note" (under 35 words, plain B1-level English):
-- found → name the SPECIFIC resume evidence (project, internship, company, skill, coursework, certification).
-- missing → state what is absent AND give concrete advice on what to highlight or add, referencing the candidate's actual background where possible.
-Keep each item's "text" short — the requirement/responsibility itself, not the analysis. Do NOT prefix notes with "Found:" or "Add:".
+Write each item's "text" as a clear, standalone requirement or responsibility:
+- Use a concise phrase or sentence that is meaningful without extra explanation.
+- Preserve concrete details such as technologies, degree fields, years of experience, and scope.
+- Start responsibilities with an action verb where possible.
+- Do not use vague fragments such as "Frontend", "Experience", or "Good communication".
+- Do not include resume evidence, match reasoning, advice, or prefixes such as "Found:" and "Missing:".
 
 Return ONLY this JSON object:
 {
   "matchedSkills": string[],
-  "requirements": [ { "text": string, "status": "found"|"missing", "note": string } ],
-  "responsibilities": [ { "text": string, "status": "found"|"missing", "note": string } ],
-  "niceToHaves": [ { "text": string, "status": "found"|"missing", "note": string } ]
+  "requirements": [ { "text": string, "status": "found"|"missing" } ],
+  "responsibilities": [ { "text": string, "status": "found"|"missing" } ],
+  "niceToHaves": [ { "text": string, "status": "found"|"missing" } ]
 }
 Be specific and honest; never invent experience. Return only the JSON object, no prose.`;
 
 const Item = z.object({
   text: z.string(),
   status: z.enum(["found", "missing"]),
-  note: z.string(),
 });
 const Raw = z.object({
   matchedSkills: z.array(z.string()).default([]),
@@ -129,13 +130,9 @@ function buildUserPrompt(input: JobFitInput): string {
 
 function toSection(items: FitItem[]): FitSection {
   const cleaned = items
-    .map((it) => ({ ...it, text: it.text.trim(), note: it.note.trim() }))
+    .map((it) => ({ ...it, text: it.text.trim() }))
     .filter((it) => it.text);
-  const found = cleaned.filter((it) => it.status === "found").length;
-  return {
-    items: cleaned,
-    coveragePct: cleaned.length ? Math.round((found / cleaned.length) * 100) : 0,
-  };
+  return { items: cleaned };
 }
 
 export async function analyzeJobFit(input: JobFitInput): Promise<JobFitAnalysis> {

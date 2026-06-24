@@ -312,7 +312,7 @@ export default function HomePage() {
                 <input
                   value={companyText}
                   onChange={(e) => setCompanyText(e.target.value)}
-                  placeholder="e.g. Google, Razorpay"
+                  placeholder="e.g. Google, Amazon (comma-separated)"
                   className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[14px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
                 />
               </Field>

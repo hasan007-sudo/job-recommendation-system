@@ -5,10 +5,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
-  Check,
   CheckCircle2,
   ChevronDown,
   ExternalLink,
+  Flag,
   Loader2,
   Phone,
   Sparkles,
@@ -17,7 +17,10 @@ import {
 import type { Round } from "../../../lib/rounds";
 import type { GeneratedQuestion } from "../../../lib/questions";
 import type { JobFitAnalysis } from "../../../lib/job-fit";
-import { deriveSearchInput, type OnboardingProfile } from "../../../lib/onboarding";
+import {
+  deriveSearchInput,
+  type OnboardingProfile,
+} from "../../../lib/onboarding";
 import { formatExperience, matchPill, initials } from "../../../lib/display";
 import { getJson, postJson } from "../../../lib/api";
 import { InterviewSession } from "../../../components/ui/InterviewSession";
@@ -60,7 +63,9 @@ function buildUserDetails(
 
   const degree = profile.education.degree.trim();
   const major = profile.education.major.trim();
-  const degreePhrase = degree ? `a ${degree}${major ? ` in ${major}` : ""}` : "";
+  const degreePhrase = degree
+    ? `a ${degree}${major ? ` in ${major}` : ""}`
+    : "";
 
   const expYears = profile.experienceMaxYears;
   const experiencePhrase =
@@ -74,7 +79,11 @@ function buildUserDetails(
   return `${name}${facts ? ` has ${facts}, and` : ""} is interviewing for ${targetPhrase}.`;
 }
 
-export default function JobDetailPage({ params }: { params: Promise<{ jobId: string }> }) {
+export default function JobDetailPage({
+  params,
+}: {
+  params: Promise<{ jobId: string }>;
+}) {
   const { jobId } = use(params);
   const router = useRouter();
   const [profile, setProfile] = useState<OnboardingProfile | null>(null);
@@ -130,7 +139,9 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
         candidateSkills: profile!.skills,
         candidateExperience: profile!.experience,
         candidateProjects: profile!.projects,
-        candidateInitiatives: (profile!.workInitiatives ?? []).flat().filter(Boolean),
+        candidateInitiatives: (profile!.workInitiatives ?? [])
+          .flat()
+          .filter(Boolean),
         experienceMinYears: profile!.experienceMinYears,
         experienceMaxYears: profile!.experienceMaxYears,
         overallPct: matchPercent ?? null,
@@ -139,7 +150,8 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
       }),
   });
   const analysis = analysisData?.analysis;
-  const analysisErr = analysisError instanceof Error ? analysisError.message : null;
+  const analysisErr =
+    analysisError instanceof Error ? analysisError.message : null;
 
   useEffect(() => {
     try {
@@ -151,7 +163,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
   }, [jobId]);
 
   return (
-    <main className="min-h-screen bg-slate-50">
+    <main className="min-h-screen bg-[#f5f3f7]">
       <header className="border-b border-slate-200 bg-white/70 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
           <button
@@ -162,7 +174,9 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
           </button>
           <div className="flex items-center gap-2">
             <div className="h-6 w-6 rounded-md bg-slate-900" />
-            <span className="text-[15px] font-bold tracking-tight text-slate-900">Rounds</span>
+            <span className="text-[15px] font-bold tracking-tight text-slate-900">
+              Rounds
+            </span>
           </div>
         </div>
       </header>
@@ -217,28 +231,29 @@ function JobDetailView({
   profile: OnboardingProfile | null;
 }) {
   const { job } = detail;
-  const experience = formatExperience(job.experienceMinYears, job.experienceMaxYears);
-  const meta = [job.seniority, experience, job.location, job.workMode].filter(Boolean);
+  const experience = formatExperience(
+    job.experienceMinYears,
+    job.experienceMaxYears,
+  );
+  const meta = [job.seniority, experience, job.location, job.workMode].filter(
+    Boolean,
+  );
   const pill = matchPill(matchPercent);
+  const source = sourcePostingMeta(job.sourceUrl);
   const skills = (job.requiredSkills ?? "")
     .split(/[,;|]/)
     .map((s) => s.trim())
     .filter(Boolean);
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-      <section className="p-8 sm:p-10">
+    <div className="space-y-5">
+      <section className="rounded-2xl bg-white p-8 sm:p-10">
         <div className="flex items-start justify-between gap-6">
           <div className="min-w-0">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-[13px] font-bold text-white">
-                {initials(job.companyName)}
-              </div>
-              <span className="text-[16px] font-semibold text-slate-500">
-                {job.companyName}
-              </span>
-            </div>
-            <h1 className="mt-5 text-[44px] font-bold leading-[1.05] tracking-tight text-slate-900">
+            <p className="text-[16px] font-semibold text-slate-500">
+              {job.companyName}
+            </p>
+            <h1 className="mt-2 text-[44px] font-bold leading-[1.05] tracking-tight text-slate-900">
               {job.jobTitle}
             </h1>
             {meta.length > 0 && (
@@ -251,36 +266,46 @@ function JobDetailView({
                 href={job.sourceUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-bold uppercase tracking-[0.18em] text-indigo-600 hover:text-indigo-800"
+                className="mt-5 inline-flex items-center gap-2 rounded-lg bg-violet-50 px-3.5 py-2 text-[14px] font-bold text-violet-600 hover:text-violet-800"
               >
-                View original posting <ExternalLink size={14} />
+                <span
+                  className={
+                    "flex h-4 w-4 items-center justify-center rounded text-[10px] font-black text-white " +
+                    source.iconClass
+                  }
+                >
+                  {source.icon}
+                </span>
+                View posting <ExternalLink size={14} />
               </a>
             )}
           </div>
-          {pill && (
-            <div className="shrink-0 text-right">
-              <div
-                className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[13px] font-bold ${pill.pill}`}
-              >
-                <span className={`h-1.5 w-1.5 rounded-full ${pill.dot}`} />
-                {matchPercent}% {pill.label}
-              </div>
-              {(skillsPct != null || projectsPct != null) && (
-                <div className="mt-2 flex items-center justify-end gap-3 text-[12px] font-semibold text-slate-500">
-                  {skillsPct != null && <span>Skills {skillsPct}%</span>}
-                  {projectsPct != null && <span>Projects {projectsPct}%</span>}
-                </div>
-              )}
-              <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
-                Based on your resume
-              </p>
-            </div>
-          )}
         </div>
         {job.roleSummary && (
-          <p className="mt-6 max-w-3xl text-[16px] leading-[1.65] text-slate-800">
+          <p className="mt-6 max-w-5xl text-[16px] leading-[1.65] text-slate-500">
             {job.roleSummary}
           </p>
+        )}
+        {(pill || skillsPct != null || projectsPct != null) && (
+          <div className="mt-6 flex flex-wrap gap-3">
+            {pill && (
+              <span
+                className={`rounded-xl px-3.5 py-2 text-[14px] font-bold ${pill.pill}`}
+              >
+                {matchPercent}% {pill.label.replace("Match", "match")}
+              </span>
+            )}
+            {skillsPct != null && (
+              <span className="rounded-xl bg-slate-100 px-3.5 py-2 text-[14px] font-bold text-slate-950">
+                {skillsPct}% Skills
+              </span>
+            )}
+            {projectsPct != null && (
+              <span className="rounded-xl bg-slate-100 px-3.5 py-2 text-[14px] font-bold text-slate-950">
+                {projectsPct}% Projects
+              </span>
+            )}
+          </div>
         )}
       </section>
 
@@ -293,9 +318,9 @@ function JobDetailView({
         />
       ) : (
         skills.length > 0 && (
-          <div className="border-t border-slate-200 p-8 sm:p-10">
-            <h2 className="mb-6 text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
-              Required skills
+          <section className="rounded-2xl bg-white p-8 sm:p-10">
+            <h2 className="mb-6 text-[15px] font-bold uppercase tracking-tight text-slate-500">
+              Skills
             </h2>
             <div className="flex flex-wrap gap-2">
               {skills.map((s, i) => (
@@ -307,32 +332,39 @@ function JobDetailView({
                 </span>
               ))}
             </div>
-          </div>
+          </section>
         )
       )}
 
-      <div className="border-t border-slate-200 bg-slate-50 p-8 sm:p-10">
+      <section className="rounded-2xl bg-white p-8 sm:p-10">
         <Rounds rounds={job.rounds} job={job} profile={profile} />
-      </div>
+      </section>
 
       {job.fullJobDescription && (
-        <div className="border-t border-slate-200 p-8 sm:p-10">
-          <h2 className="mb-6 text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
+        <section className="rounded-2xl bg-white p-8 sm:p-10">
+          <h2 className="mb-6 text-[15px] font-bold uppercase tracking-tight text-slate-500">
             Full job description
           </h2>
           <p className="max-w-3xl whitespace-pre-wrap text-[14.5px] leading-[1.7] text-slate-700">
             {job.fullJobDescription}
           </p>
-        </div>
+        </section>
       )}
     </div>
   );
 }
 
-function coverageTint(pct: number): string {
-  if (pct >= 80) return "bg-emerald-50 text-emerald-700";
-  if (pct >= 60) return "bg-amber-50 text-amber-700";
-  return "bg-rose-50 text-rose-700";
+function sourcePostingMeta(sourceUrl: string | null): {
+  icon: string;
+  iconClass: string;
+} {
+  if (sourceUrl && /(^|\/\/|\.)(linkedin)\.com/i.test(sourceUrl)) {
+    return { icon: "in", iconClass: "bg-[#0a66c2]" };
+  }
+  if (sourceUrl && /(^|\/\/|\.)(naukri)\.com/i.test(sourceUrl)) {
+    return { icon: "N", iconClass: "bg-[#275df5]" };
+  }
+  return { icon: "↗", iconClass: "bg-slate-950" };
 }
 
 // Skills chips + the three fit accordions (Requirements / Responsibilities /
@@ -350,53 +382,70 @@ function JobFitSections({
   fallbackSkills: string[];
 }) {
   const skills =
-    analysis?.skills ?? fallbackSkills.map((skill) => ({ skill, matched: false }));
+    analysis?.skills ??
+    fallbackSkills.map((skill) => ({ skill, matched: false }));
+  const sortedSkills = [
+    ...skills.filter((skill) => skill.matched),
+    ...skills.filter((skill) => !skill.matched),
+  ];
 
   return (
     <>
       {skills.length > 0 && (
-        <div className="border-t border-slate-200 p-8 sm:p-10">
-          <h2 className="mb-6 text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
+        <section className="rounded-2xl bg-white p-8 sm:p-10">
+          <h2 className="mb-6 text-[15px] font-bold uppercase tracking-tight text-slate-500">
             Skills
           </h2>
           <div className="flex flex-wrap gap-2">
-            {skills.map((s, i) => (
+            {sortedSkills.map((s, i) => (
               <span
                 key={i}
                 className={
-                  "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[13px] font-medium " +
+                  "inline-flex items-center rounded-lg px-3 py-2 text-[14px] font-semibold " +
                   (s.matched
-                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                    : "border-slate-200 bg-white text-slate-700")
+                    ? "bg-amber-50 text-orange-600"
+                    : "bg-slate-100 text-slate-950")
                 }
               >
-                {s.matched && <Check size={13} strokeWidth={3} className="text-emerald-500" />}
                 {s.skill}
               </span>
             ))}
           </div>
-        </div>
+        </section>
       )}
 
       {loading && (
-        <div className="border-t border-slate-200 p-8 sm:p-10">
+        <section className="rounded-2xl bg-white p-8 sm:p-10">
           <p className="flex items-center gap-2 text-[13px] font-semibold text-slate-500">
-            <Loader2 size={15} className="animate-spin" /> Analyzing your resume against this role…
+            <Loader2 size={15} className="animate-spin" /> Analyzing your resume
+            against this role…
           </p>
-        </div>
+        </section>
       )}
 
       {error && !loading && (
-        <div className="border-t border-slate-200 p-8 sm:p-10">
+        <section className="rounded-2xl bg-white p-8 sm:p-10">
           <p className="text-[13px] text-rose-600">{error}</p>
-        </div>
+        </section>
       )}
 
       {analysis && !loading && (
         <>
-          <FitAccordion title="Requirements" section={analysis.requirements} defaultOpen />
-          <FitAccordion title="Responsibilities" section={analysis.responsibilities} />
-          <FitAccordion title="Nice to haves" section={analysis.niceToHaves} />
+          <FitAccordion
+            title="Responsibilities"
+            section={analysis.responsibilities}
+            defaultOpen
+          />
+          <FitAccordion
+            title="Requirements"
+            section={analysis.requirements}
+            defaultOpen
+          />
+          <FitAccordion
+            title="Nice to have"
+            section={analysis.niceToHaves}
+            defaultOpen
+          />
         </>
       )}
     </>
@@ -416,60 +465,79 @@ function FitAccordion({
   if (section.items.length === 0) return null;
 
   return (
-    <div className="border-t border-slate-200">
+    <section className="rounded-2xl bg-white">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-4 px-8 py-7 text-left hover:bg-slate-50 sm:px-10"
+        className="flex w-full items-center justify-between gap-4 px-8 py-7 text-left sm:px-10"
       >
-        <h2 className="text-[15px] font-bold tracking-tight text-slate-900">{title}</h2>
-        <div className="flex items-center gap-3">
-          <span
-            className={
-              "rounded-lg px-2.5 py-1 text-[14px] font-bold tabular-nums " +
-              coverageTint(section.coveragePct)
-            }
-          >
-            {section.coveragePct}%
-          </span>
-          <ChevronDown
-            size={18}
-            className={"text-slate-400 transition-transform " + (open ? "rotate-180" : "")}
-          />
-        </div>
+        <h2 className="text-[15px] font-bold uppercase tracking-tight text-slate-500">
+          {title}
+        </h2>
+        <ChevronDown
+          size={20}
+          className={
+            "text-slate-950 transition-transform " + (open ? "rotate-180" : "")
+          }
+        />
       </button>
       {open && (
-        <ul className="space-y-6 px-8 pb-8 sm:px-10">
-          {section.items.map((item, i) => (
-            <FitRow key={i} item={item} />
-          ))}
-        </ul>
+        <div className="space-y-7 px-8 pb-8 sm:px-10">
+          <FitGroup
+            label="Strong Match"
+            items={section.items.filter((item) => item.status === "found")}
+            matched
+          />
+          <FitGroup
+            label="Gap"
+            items={section.items.filter((item) => item.status === "missing")}
+          />
+        </div>
       )}
-    </div>
+    </section>
   );
 }
 
-function FitRow({ item }: { item: JobFitAnalysis["requirements"]["items"][number] }) {
-  const found = item.status === "found";
+function FitGroup({
+  label,
+  items,
+  matched = false,
+}: {
+  label: string;
+  items: JobFitAnalysis["requirements"]["items"];
+  matched?: boolean;
+}) {
+  if (items.length === 0) return null;
+
   return (
-    <li className="border-l-2 border-slate-100 pl-5">
-      <div className="flex items-start gap-3">
-        {found ? (
-          <CheckCircle2 size={20} className="mt-0.5 shrink-0 text-emerald-500" />
-        ) : (
-          <XCircle size={20} className="mt-0.5 shrink-0 text-rose-400" />
-        )}
-        <p className="text-[15px] font-semibold leading-snug text-slate-900">{item.text}</p>
-      </div>
+    <section>
       <div
         className={
-          "ml-8 mt-3 rounded-xl px-4 py-3 text-[13.5px] leading-[1.6] " +
-          (found ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800")
+          "mb-3 flex items-center gap-2 text-[14px] font-bold " +
+          (matched ? "text-emerald-700" : "text-rose-600")
         }
       >
-        <span className="font-bold">{found ? "✓ Found: " : "→ Add: "}</span>
-        {item.note}
+        <Flag size={18} strokeWidth={2.25} />
+        <h3>{label}</h3>
       </div>
-    </li>
+      <ul className="space-y-3">
+        {items.map((item, i) => (
+          <li
+            key={i}
+            className="flex items-start gap-3 text-[14.5px] leading-[1.55] text-slate-600"
+          >
+            {matched ? (
+              <CheckCircle2
+                size={18}
+                className="mt-0.5 shrink-0 text-emerald-500"
+              />
+            ) : (
+              <XCircle size={18} className="mt-0.5 shrink-0 text-rose-400" />
+            )}
+            <span>{item.text}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -493,9 +561,18 @@ function Rounds({
         </span>
       </div>
       <ol className="relative space-y-7">
-        <span aria-hidden className="absolute left-3.5 top-3 bottom-3 w-px bg-slate-200" />
+        <span
+          aria-hidden
+          className="absolute left-3.5 top-3 bottom-3 w-px bg-slate-200"
+        />
         {rounds.map((r, i) => (
-          <RoundItem key={r.position} round={r} isFirst={i === 0} job={job} profile={profile} />
+          <RoundItem
+            key={r.position}
+            round={r}
+            isFirst={i === 0}
+            job={job}
+            profile={profile}
+          />
         ))}
       </ol>
     </section>
@@ -518,7 +595,10 @@ function RoundItem({
   const [genError, setGenError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
-  const [session, setSession] = useState<{ token: string; serverUrl: string } | null>(null);
+  const [session, setSession] = useState<{
+    token: string;
+    serverUrl: string;
+  } | null>(null);
 
   const mins = ROUND_MINUTES[round.slug] ?? 10;
 
@@ -543,9 +623,14 @@ function RoundItem({
       if (result.error || !result.participant_token || !result.server_url) {
         throw new Error(result.error ?? "Failed to start interview.");
       }
-      setSession({ token: result.participant_token, serverUrl: result.server_url });
+      setSession({
+        token: result.participant_token,
+        serverUrl: result.server_url,
+      });
     } catch (e) {
-      setStartError(e instanceof Error ? e.message : "Failed to start interview.");
+      setStartError(
+        e instanceof Error ? e.message : "Failed to start interview.",
+      );
     } finally {
       setStarting(false);
     }
@@ -555,30 +640,32 @@ function RoundItem({
     setLoading(true);
     setGenError(null);
     try {
-      const result = await postJson<{ questions?: GeneratedQuestion[]; error?: string }>(
-        `/api/jobs/${job.jobId}/questions`,
-        {
-          roundSlug: round.slug,
-          roundTitle: round.title,
-          competencies: round.competencies,
-          jobTitle: job.jobTitle,
-          requiredSkills: job.requiredSkills,
-          roleSummary: job.roleSummary,
-          ...(profile
-            ? {
-                candidateSkills: profile.skills,
-                candidateExperience: profile.experience,
-                candidateProjects: profile.projects,
-                experienceMinYears: profile.experienceMinYears,
-                experienceMaxYears: profile.experienceMaxYears,
-              }
-            : {}),
-        },
-      );
+      const result = await postJson<{
+        questions?: GeneratedQuestion[];
+        error?: string;
+      }>(`/api/jobs/${job.jobId}/questions`, {
+        roundSlug: round.slug,
+        roundTitle: round.title,
+        competencies: round.competencies,
+        jobTitle: job.jobTitle,
+        requiredSkills: job.requiredSkills,
+        roleSummary: job.roleSummary,
+        ...(profile
+          ? {
+              candidateSkills: profile.skills,
+              candidateExperience: profile.experience,
+              candidateProjects: profile.projects,
+              experienceMinYears: profile.experienceMinYears,
+              experienceMaxYears: profile.experienceMaxYears,
+            }
+          : {}),
+      });
       if (result.error) throw new Error(result.error);
       setQuestions(result.questions ?? []);
     } catch (e) {
-      setGenError(e instanceof Error ? e.message : "Failed to generate questions.");
+      setGenError(
+        e instanceof Error ? e.message : "Failed to generate questions.",
+      );
     } finally {
       setLoading(false);
     }
@@ -632,9 +719,7 @@ function RoundItem({
             </p>
           )}
 
-          {genError && (
-            <p className="text-[13px] text-rose-600">{genError}</p>
-          )}
+          {genError && <p className="text-[13px] text-rose-600">{genError}</p>}
 
           {questions !== null && questions.length > 0 && (
             <div className="rounded-xl border border-slate-200 bg-white p-5">
@@ -644,7 +729,9 @@ function RoundItem({
                     <span className="mt-0.5 text-[11px] font-bold tabular-nums text-indigo-500">
                       {String(qi + 1).padStart(2, "0")}
                     </span>
-                    <span className="text-[14px] leading-[1.6] text-slate-700">{q.text}</span>
+                    <span className="text-[14px] leading-[1.6] text-slate-700">
+                      {q.text}
+                    </span>
                   </li>
                 ))}
               </ol>
