@@ -1,4 +1,50 @@
 @import "tailwindcss";
 
+@theme {
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 24px;
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+}
+
+:root {
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 24px;
+  --paper: #ffffff;
+  --paper-2: #f8fafc;
+  --card: #ffffff;
+  --ink: #0f172a;
+  --ink-2: #1e293b;
+  --ink-3: #64748b;
+  --ink-mute: #94a3b8;
+  --ink-soft: #1e293b;
+  --rule: #e2e8f0;
+  --rule-strong: #cbd5e1;
+  --accent: #4f46e5;
+  --accent-soft: #4338ca;
+}
+
+@keyframes accordion-down {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height);
+  }
+}
+
+@keyframes accordion-up {
+  from {
+    height: var(--radix-accordion-content-height);
+  }
+  to {
+    height: 0;
+  }
+}
+
 html, body { margin: 0; }
 body { font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }

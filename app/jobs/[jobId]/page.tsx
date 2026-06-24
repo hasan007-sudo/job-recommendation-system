@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   CheckCircle2,
-  ChevronDown,
   ExternalLink,
   Flag,
   Loader2,
@@ -24,6 +23,12 @@ import {
 import { formatExperience, matchPill, initials } from "../../../lib/display";
 import { getJson, postJson } from "../../../lib/api";
 import { InterviewSession } from "../../../components/ui/InterviewSession";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "../../../components/shadcn/accordion";
 
 type JobDetail = {
   job: {
@@ -250,14 +255,14 @@ function JobDetailView({
       <section className="rounded-2xl bg-white p-8 sm:p-10">
         <div className="flex items-start justify-between gap-6">
           <div className="min-w-0">
-            <p className="text-[16px] font-semibold text-slate-500">
+            <p className="text-md font-semibold text-slate-500">
               {job.companyName}
             </p>
-            <h1 className="mt-2 text-[44px] font-bold leading-[1.05] tracking-tight text-slate-900">
+            <h1 className="mt-2 text-lg font-bold leading-[1.05] tracking-tight text-slate-900">
               {job.jobTitle}
             </h1>
             {meta.length > 0 && (
-              <p className="mt-3 text-[15px] text-slate-500">
+              <p className="mt-3 text-sm text-slate-500">
                 <span className="capitalize">{meta.join(" · ")}</span>
               </p>
             )}
@@ -266,7 +271,7 @@ function JobDetailView({
                 href={job.sourceUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mt-5 inline-flex items-center gap-2 rounded-lg bg-violet-50 px-3.5 py-2 text-[14px] font-bold text-violet-600 hover:text-violet-800"
+                className="mt-5 inline-flex items-center gap-2 rounded-lg bg-violet-50 px-3.5 py-2 text-sm font-bold text-violet-600 hover:text-violet-800"
               >
                 <span
                   className={
@@ -282,7 +287,7 @@ function JobDetailView({
           </div>
         </div>
         {job.roleSummary && (
-          <p className="mt-6 max-w-5xl text-[16px] leading-[1.65] text-slate-500">
+          <p className="mt-6 max-w-5xl text-base leading-[1.65] text-slate-500">
             {job.roleSummary}
           </p>
         )}
@@ -290,18 +295,18 @@ function JobDetailView({
           <div className="mt-6 flex flex-wrap gap-3">
             {pill && (
               <span
-                className={`rounded-xl px-3.5 py-2 text-[14px] font-bold ${pill.pill}`}
+                className={`rounded-xl px-3.5 py-2 text-md font-bold ${pill.pill}`}
               >
                 {matchPercent}% {pill.label.replace("Match", "match")}
               </span>
             )}
             {skillsPct != null && (
-              <span className="rounded-xl bg-slate-100 px-3.5 py-2 text-[14px] font-bold text-slate-950">
+              <span className="rounded-xl bg-slate-100 px-3.5 py-2 text-md font-bold text-slate-950">
                 {skillsPct}% Skills
               </span>
             )}
             {projectsPct != null && (
-              <span className="rounded-xl bg-slate-100 px-3.5 py-2 text-[14px] font-bold text-slate-950">
+              <span className="rounded-xl bg-slate-100 px-3.5 py-2 text-md font-bold text-slate-950">
                 {projectsPct}% Projects
               </span>
             )}
@@ -319,14 +324,14 @@ function JobDetailView({
       ) : (
         skills.length > 0 && (
           <section className="rounded-2xl bg-white p-8 sm:p-10">
-            <h2 className="mb-6 text-[15px] font-bold uppercase tracking-tight text-slate-500">
+            <h2 className="mb-6 text-md font-bold uppercase tracking-tight text-slate-500">
               Skills
             </h2>
             <div className="flex flex-wrap gap-2">
               {skills.map((s, i) => (
                 <span
                   key={i}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-medium text-slate-700"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-base font-medium text-slate-700"
                 >
                   {s}
                 </span>
@@ -342,10 +347,10 @@ function JobDetailView({
 
       {job.fullJobDescription && (
         <section className="rounded-2xl bg-white p-8 sm:p-10">
-          <h2 className="mb-6 text-[15px] font-bold uppercase tracking-tight text-slate-500">
+          <h2 className="mb-6 text-md font-bold uppercase tracking-tight text-slate-500">
             Full job description
           </h2>
-          <p className="max-w-3xl whitespace-pre-wrap text-[14.5px] leading-[1.7] text-slate-700">
+          <p className="max-w-3xl whitespace-pre-wrap text-base leading-[1.7] text-slate-700">
             {job.fullJobDescription}
           </p>
         </section>
@@ -393,7 +398,7 @@ function JobFitSections({
     <>
       {skills.length > 0 && (
         <section className="rounded-2xl bg-white p-8 sm:p-10">
-          <h2 className="mb-6 text-[15px] font-bold uppercase tracking-tight text-slate-500">
+          <h2 className="mb-6 text-md font-bold uppercase tracking-tight text-slate-500">
             Skills
           </h2>
           <div className="flex flex-wrap gap-2">
@@ -401,7 +406,7 @@ function JobFitSections({
               <span
                 key={i}
                 className={
-                  "inline-flex items-center rounded-lg px-3 py-2 text-[14px] font-semibold " +
+                  "inline-flex items-center rounded-lg px-3 py-2 text-base font-semibold " +
                   (s.matched
                     ? "bg-amber-50 text-orange-600"
                     : "bg-slate-100 text-slate-950")
@@ -416,7 +421,7 @@ function JobFitSections({
 
       {loading && (
         <section className="rounded-2xl bg-white p-8 sm:p-10">
-          <p className="flex items-center gap-2 text-[13px] font-semibold text-slate-500">
+          <p className="flex items-center gap-2 text-base font-semibold text-slate-500">
             <Loader2 size={15} className="animate-spin" /> Analyzing your resume
             against this role…
           </p>
@@ -425,7 +430,7 @@ function JobFitSections({
 
       {error && !loading && (
         <section className="rounded-2xl bg-white p-8 sm:p-10">
-          <p className="text-[13px] text-rose-600">{error}</p>
+          <p className="text-base text-rose-600">{error}</p>
         </section>
       )}
 
@@ -461,27 +466,22 @@ function FitAccordion({
   section: JobFitAnalysis["requirements"];
   defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
   if (section.items.length === 0) return null;
 
   return (
-    <section className="rounded-2xl bg-white">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-4 px-8 py-7 text-left sm:px-10"
-      >
-        <h2 className="text-[15px] font-bold uppercase tracking-tight text-slate-500">
-          {title}
-        </h2>
-        <ChevronDown
-          size={20}
-          className={
-            "text-slate-950 transition-transform " + (open ? "rotate-180" : "")
-          }
-        />
-      </button>
-      {open && (
-        <div className="space-y-7 px-8 pb-8 sm:px-10">
+    <Accordion
+      type="single"
+      collapsible
+      defaultValue={defaultOpen ? "content" : undefined}
+      className="rounded-2xl bg-white"
+    >
+      <AccordionItem value="content" className="border-b-0">
+        <AccordionTrigger className="px-8 py-7 text-left hover:no-underline sm:px-10 [&>svg]:text-slate-950">
+          <h2 className="text-md font-bold uppercase tracking-tight text-slate-500">
+            {title}
+          </h2>
+        </AccordionTrigger>
+        <AccordionContent className="space-y-7 px-8 pb-8 sm:px-10">
           <FitGroup
             label="Strong Match"
             items={section.items.filter((item) => item.status === "found")}
@@ -491,9 +491,9 @@ function FitAccordion({
             label="Gap"
             items={section.items.filter((item) => item.status === "missing")}
           />
-        </div>
-      )}
-    </section>
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
   );
 }
 
@@ -512,7 +512,7 @@ function FitGroup({
     <section>
       <div
         className={
-          "mb-3 flex items-center gap-2 text-[14px] font-bold " +
+          "mb-3 flex items-center gap-2 text-md font-bold " +
           (matched ? "text-emerald-700" : "text-rose-600")
         }
       >
@@ -523,7 +523,7 @@ function FitGroup({
         {items.map((item, i) => (
           <li
             key={i}
-            className="flex items-start gap-3 text-[14.5px] leading-[1.55] text-slate-600"
+            className="flex items-start gap-3 text-base leading-[1.55] text-slate-600"
           >
             {matched ? (
               <CheckCircle2
@@ -553,10 +553,10 @@ function Rounds({
   return (
     <section>
       <div className="mb-6 flex items-end justify-between">
-        <h2 className="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
+        <h2 className="text-md font-bold uppercase tracking-tight text-slate-500">
           Interview process
         </h2>
-        <span className="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
+        <span className="text-sm font-bold uppercase tracking-[0.18em] text-slate-500">
           {rounds.length} Rounds
         </span>
       </div>

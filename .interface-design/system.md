@@ -1,8 +1,9 @@
-# Design System — /onboarding (Rounds prototype)
+# Design System — Rounds prototype
 
-Scope: applies to the `/onboarding` route. Extracted from the current
-implementation (`app/onboarding/page.tsx`). The existing `/` page uses the
-project's older plain-CSS system and is intentionally left untouched.
+Scope: typography tokens apply across the application. The color, spacing, and
+component patterns below were originally extracted from the `/onboarding` route
+(`app/onboarding/page.tsx`) and should be reused where they fit, but not forced
+onto unrelated legacy surfaces without an explicit design pass.
 
 ## Direction
 - **Personality:** clean, modern SaaS. Calm neutral canvas, confident indigo accent.
@@ -45,8 +46,13 @@ Rules:
 - Use indigo for interactive affordances (links, primary action accents, focus); never for large fills.
 
 ### Typography
-- Family: **Inter** (`--font-sans`, loaded in `app/layout.tsx`).
-- Scale (px): display `44`, page-title `40`, lead `15–16`, body `14–15`, meta `12–13`, eyebrow/label `10–11`.
+- Family: **Figtree** (`--font-sans`, loaded in `app/layout.tsx`).
+- App-wide Tailwind text scale is configured in `app/globals.css`:
+  - `text-lg` = `24px` for primary page/entity titles, e.g. job title.
+  - `text-md` = `14px` for section headers, company names, score pills, and compact labels.
+  - `text-base` = `13px` for body copy, job descriptions, skills, and list rows.
+  - `text-sm` = `12px` for metadata, location/experience rows, and tertiary CTA text.
+- Avoid arbitrary text sizes on new UI unless a design pass explicitly calls for a one-off display size.
 - Weight: headings `font-bold`; field values `font-semibold`; body `normal`; eyebrows `font-bold`.
 - Line-height: headings `1.05`; body/lead `1.6` for readability.
 
