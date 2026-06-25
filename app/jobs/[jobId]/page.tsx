@@ -4,8 +4,9 @@ import { use, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
+  Blocks,
   CheckCircle2,
-  Flag,
+  Goal,
   Loader2,
   Phone,
   Play,
@@ -566,7 +567,11 @@ function FitGroup({
           (matched ? "text-emerald-700" : "text-rose-600")
         }
       >
-        <Flag size={18} strokeWidth={2.25} />
+        {matched ? (
+          <Goal size={18} strokeWidth={2.25} />
+        ) : (
+          <Blocks size={18} strokeWidth={2.25} />
+        )}
         <h3>{label}</h3>
       </div>
       <ul className="space-y-3">
