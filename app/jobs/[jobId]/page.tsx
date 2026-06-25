@@ -1,27 +1,23 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   CheckCircle2,
-  ExternalLink,
   Flag,
   Loader2,
   Phone,
+  Play,
   Sparkles,
   XCircle,
 } from "lucide-react";
 import type { Round } from "../../../lib/rounds";
 import type { GeneratedQuestion } from "../../../lib/questions";
 import type { JobFitAnalysis } from "../../../lib/job-fit";
-import {
-  deriveSearchInput,
-  type OnboardingProfile,
-} from "../../../lib/onboarding";
-import { formatExperience, matchPill, initials } from "../../../lib/display";
-import { getJson, postJson } from "../../../lib/api";
+import { type OnboardingProfile } from "../../../lib/onboarding";
+import { formatExperience } from "../../../lib/display";
+import { postJson } from "../../../lib/api";
 import { InterviewSession } from "../../../components/ui/InterviewSession";
 import {
   Accordion,
@@ -29,25 +25,15 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "../../../components/shadcn/accordion";
-
-type JobDetail = {
-  job: {
-    jobId: string;
-    jobTitle: string;
-    companyName: string;
-    seniority: string;
-    experienceMinYears: number | null;
-    experienceMaxYears: number | null;
-    location: string | null;
-    workMode: string | null;
-    educationRequirement: string | null;
-    requiredSkills: string | null;
-    roleSummary: string | null;
-    sourceUrl: string | null;
-    fullJobDescription: string | null;
-    rounds: Round[];
-  };
-};
+import { Badge } from "../../../components/shadcn/badge";
+import { Button } from "../../../components/shadcn/button";
+import { Card, CardContent } from "../../../components/shadcn/card";
+import {
+  type JobDetail,
+  useJobAnalysis,
+  useJobDetail,
+  useJobMatch,
+} from "../../../hooks/use-job-detail";
 
 const ROUND_MINUTES: Record<string, number> = {
   screening: 10,
@@ -55,6 +41,8 @@ const ROUND_MINUTES: Record<string, number> = {
   technical: 10,
   culture_fit: 10,
 };
+
+type DetailStep = "match-details" | "round-list";
 
 // One-sentence candidate summary passed to the interview agent (name, degree,
 // experience, target role + company) so it can personalize the greeting.
@@ -91,68 +79,26 @@ export default function JobDetailPage({
 }) {
   const { jobId } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const step = getDetailStep(searchParams.get("step"));
   const [profile, setProfile] = useState<OnboardingProfile | null>(null);
 
-  const { data: detail, error: queryError } = useQuery({
-    queryKey: ["job", jobId],
-    queryFn: () => getJson<JobDetail>(`/api/jobs/${jobId}`),
-  });
+  const { data: detail, error: queryError } = useJobDetail(jobId);
   const error = queryError instanceof Error ? queryError.message : "";
 
-  // Match % is profile-relative, so it's computed server-side from the candidate's
-  // skills + projects. The page reads its own profile and asks the job API — no
-  // dependency on the search list or shared score state.
-  const { data: matchData } = useQuery({
-    queryKey: ["job-match", jobId, profile?.skills, profile?.projectKeywords],
-    enabled: !!profile,
-    queryFn: () => {
-      const { skills, projectTexts } = deriveSearchInput(profile!);
-      return postJson<{
-        match?: {
-          score: number | null;
-          skillsPct: number | null;
-          projectsPct: number | null;
-        };
-      }>(`/api/jobs/${jobId}/match`, { skills, projectTexts });
-    },
-  });
+  const { data: matchData } = useJobMatch(jobId, profile);
   const matchPercent = matchData?.match?.score ?? undefined;
   const skillsPct = matchData?.match?.skillsPct ?? undefined;
   const projectsPct = matchData?.match?.projectsPct ?? undefined;
 
-  // One LLM call analyzes skills + requirements + responsibilities + nice-to-haves
-  // against the resume, anchored by our match scores so the LLM's verdicts don't
-  // drift from the engine. Runs once the match resolves (cached per job+profile).
   const {
     data: analysisData,
     isLoading: analysisLoading,
     error: analysisError,
-  } = useQuery({
-    queryKey: [
-      "job-analysis",
-      jobId,
-      profile?.skills,
-      profile?.projects,
-      profile?.experience,
-      matchPercent,
-      skillsPct,
-      projectsPct,
-    ],
-    enabled: !!profile && matchData !== undefined,
-    queryFn: () =>
-      postJson<{ analysis?: JobFitAnalysis }>(`/api/jobs/${jobId}/analysis`, {
-        candidateSkills: profile!.skills,
-        candidateExperience: profile!.experience,
-        candidateProjects: profile!.projects,
-        candidateInitiatives: (profile!.workInitiatives ?? [])
-          .flat()
-          .filter(Boolean),
-        experienceMinYears: profile!.experienceMinYears,
-        experienceMaxYears: profile!.experienceMaxYears,
-        overallPct: matchPercent ?? null,
-        skillsPct: skillsPct ?? null,
-        projectsPct: projectsPct ?? null,
-      }),
+  } = useJobAnalysis({
+    jobId,
+    match: matchData,
+    profile,
   });
   const analysis = analysisData?.analysis;
   const analysisErr =
@@ -167,36 +113,28 @@ export default function JobDetailPage({
     }
   }, [jobId]);
 
+  useEffect(() => {
+    if (searchParams.get("step")) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("step", "match-details");
+    router.replace(url.pathname + url.search, { scroll: false });
+  }, [router, searchParams]);
+
   return (
     <main className="min-h-screen bg-[#f5f3f7]">
-      <header className="border-b border-slate-200 bg-white/70 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <button
-            onClick={() => router.push("/")}
-            className="inline-flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-[0.18em] text-slate-500 hover:text-slate-900"
-          >
-            <ArrowLeft size={14} /> Back to matches
-          </button>
-          <div className="flex items-center gap-2">
-            <div className="h-6 w-6 rounded-md bg-slate-900" />
-            <span className="text-[15px] font-bold tracking-tight text-slate-900">
-              Rounds
-            </span>
-          </div>
-        </div>
-      </header>
-
-      <div className="mx-auto max-w-7xl px-6 py-10">
+      <div className="mx-auto max-w-6xl px-5 py-5 sm:px-8">
         {error && (
-          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-rose-700">
-            {error}
-          </div>
+          <Card className="rounded-2xl border-rose-200 bg-rose-50">
+            <CardContent className="p-5 text-rose-700">{error}</CardContent>
+          </Card>
         )}
 
         {!error && !detail && (
-          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-8 text-slate-500">
-            <Loader2 size={18} className="animate-spin" /> Loading job…
-          </div>
+          <Card className="rounded-xl border-slate-200 bg-white">
+            <CardContent className="flex items-center gap-2 px-5 py-8 text-slate-500">
+              <Loader2 size={18} className="animate-spin" /> Loading job…
+            </CardContent>
+          </Card>
         )}
 
         {detail && (
@@ -209,11 +147,23 @@ export default function JobDetailPage({
             analysisLoading={analysisLoading}
             analysisError={analysisErr}
             profile={profile}
+            step={step}
+            onStepChange={(s) => {
+              const url = new URL(window.location.href);
+              url.searchParams.set("step", s);
+              router.push(url.pathname + url.search);
+            }}
+            onBackToMatches={() => router.push("/")}
           />
         )}
       </div>
     </main>
   );
+}
+
+function getDetailStep(step: string | null): DetailStep {
+  if (step === "round-list" || step === "2") return "round-list";
+  return "match-details";
 }
 
 function JobDetailView({
@@ -225,6 +175,9 @@ function JobDetailView({
   analysisLoading,
   analysisError,
   profile,
+  step,
+  onStepChange,
+  onBackToMatches,
 }: {
   detail: JobDetail;
   matchPercent: number | undefined;
@@ -234,6 +187,9 @@ function JobDetailView({
   analysisLoading: boolean;
   analysisError: string | null;
   profile: OnboardingProfile | null;
+  step: DetailStep;
+  onStepChange: (step: DetailStep) => void;
+  onBackToMatches: () => void;
 }) {
   const { job } = detail;
   const experience = formatExperience(
@@ -243,76 +199,165 @@ function JobDetailView({
   const meta = [job.seniority, experience, job.location, job.workMode].filter(
     Boolean,
   );
-  const pill = matchPill(matchPercent);
   const source = sourcePostingMeta(job.sourceUrl);
   const skills = (job.requiredSkills ?? "")
     .split(/[,;|]/)
     .map((s) => s.trim())
     .filter(Boolean);
 
-  return (
-    <div className="space-y-5">
-      <section className="rounded-2xl bg-white p-8 sm:p-10">
-        <div className="flex items-start justify-between gap-6">
-          <div className="min-w-0">
-            <p className="text-md font-semibold text-slate-500">
-              {job.companyName}
-            </p>
-            <h1 className="mt-2 text-lg font-bold leading-[1.05] tracking-tight text-slate-900">
-              {job.jobTitle}
-            </h1>
-            {meta.length > 0 && (
-              <p className="mt-3 text-sm text-slate-500">
-                <span className="capitalize">{meta.join(" · ")}</span>
-              </p>
-            )}
-            {job.sourceUrl && (
-              <a
-                href={job.sourceUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-5 inline-flex items-center gap-2 rounded-lg bg-violet-50 px-3.5 py-2 text-sm font-bold text-violet-600 hover:text-violet-800"
-              >
-                <span
-                  className={
-                    "flex h-4 w-4 items-center justify-center rounded text-[10px] font-black text-white " +
-                    source.iconClass
-                  }
-                >
-                  {source.icon}
-                </span>
-                View posting <ExternalLink size={14} />
-              </a>
-            )}
-          </div>
+  if (step === "round-list") {
+    return (
+      <div className="space-y-9">
+        <Button
+          variant="ghost"
+          size="auto"
+          onClick={() => onStepChange("match-details")}
+          className="gap-3 border-transparent text-md font-bold text-black hover:text-black"
+        >
+          <ArrowLeft size={18} strokeWidth={2} /> Back
+        </Button>
+
+        <div>
+          <Card className="rounded-2xl border-0 bg-white">
+            <CardContent className="p-5 sm:p-6">
+              <div className="min-w-0">
+                <p className="text-md font-semibold text-slate-500">
+                  {job.companyName}
+                </p>
+                <h1 className="mt-2 text-lg font-extrabold leading-[1.05] tracking-tight text-black">
+                  {job.jobTitle}
+                </h1>
+                {meta.length > 0 && (
+                  <p className="mt-3 text-sm text-slate-500">
+                    <span className="capitalize">{meta.join(" · ")}</span>
+                  </p>
+                )}
+                {job.sourceUrl && (
+                  <a
+                    href={job.sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-6 inline-flex items-center gap-2 rounded-xl bg-violet-50 px-4 py-2 text-sm font-bold text-violet-600 hover:text-violet-800"
+                  >
+                    <span
+                      className={
+                        "flex h-5 w-5 items-center justify-center rounded text-sm font-black text-white " +
+                        source.iconClass
+                      }
+                    >
+                      {source.icon}
+                    </span>
+                    View original posting
+                  </a>
+                )}
+                {job.roleSummary && (
+                  <p className="mt-5 max-w-5xl text-base leading-7 text-slate-500">
+                    {job.roleSummary}
+                  </p>
+                )}
+                <div className="mt-6 flex flex-wrap items-center gap-4">
+                  {skillsPct != null && (
+                    <Badge className="rounded-xl border-0 bg-slate-100 px-3 py-2 text-base text-black">
+                      <strong>{skillsPct}%</strong> Skills
+                    </Badge>
+                  )}
+                  {projectsPct != null && (
+                    <Badge className="rounded-xl border-0 bg-slate-100 px-3 py-2 text-base text-black">
+                      <strong>{projectsPct}%</strong> Projects
+                    </Badge>
+                  )}
+                  <Badge className="rounded-xl border-0 bg-slate-100 px-3 py-2 text-base text-black">
+                    {job.rounds.length} Rounds
+                  </Badge>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
-        {job.roleSummary && (
-          <p className="mt-6 max-w-5xl text-base leading-[1.65] text-slate-500">
-            {job.roleSummary}
-          </p>
-        )}
-        {(pill || skillsPct != null || projectsPct != null) && (
-          <div className="mt-6 flex flex-wrap gap-3">
-            {pill && (
-              <span
-                className={`rounded-xl px-3.5 py-2 text-md font-bold ${pill.pill}`}
+
+        <Rounds rounds={job.rounds} job={job} profile={profile} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <Button
+        variant="ghost"
+        size="auto"
+        onClick={onBackToMatches}
+        className="gap-3 border-transparent text-md font-bold text-black hover:text-black"
+      >
+        <ArrowLeft size={18} strokeWidth={2} /> Back
+      </Button>
+
+      <Card className="rounded-2xl border-0 bg-white">
+        <CardContent className="p-5 sm:p-6">
+          <div className="flex items-start justify-between gap-6">
+            <div className="min-w-0">
+              <p className="text-md font-semibold text-slate-500">
+                {job.companyName}
+              </p>
+              <h1 className="mt-2 text-lg font-extrabold leading-[1.05] tracking-tight text-black">
+                {job.jobTitle}
+              </h1>
+              {meta.length > 0 && (
+                <p className="mt-3 text-sm text-slate-500">
+                  <span className="capitalize">{meta.join(" · ")}</span>
+                </p>
+              )}
+              {job.sourceUrl && (
+                <a
+                  href={job.sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-6 inline-flex items-center gap-2 rounded-xl bg-violet-50 px-4 py-2 text-sm font-bold text-violet-600 hover:text-violet-800"
+                >
+                  <span
+                    className={
+                      "flex h-5 w-5 items-center justify-center rounded text-sm font-black text-white " +
+                      source.iconClass
+                    }
+                  >
+                    {source.icon}
+                  </span>
+                  View original posting
+                </a>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-7">
+              <MatchScoreRing score={matchPercent} />
+              <Button
+                variant="accent"
+                size="lg"
+                onClick={() => onStepChange("round-list")}
+                className="rounded-full border-transparent bg-[linear-gradient(90deg,#5B37C8_0%,#6D47F4_100%)] px-10 text-md font-bold text-white shadow-sm hover:opacity-95"
               >
-                {matchPercent}% {pill.label.replace("Match", "match")}
-              </span>
-            )}
+                Start Interview
+              </Button>
+            </div>
+          </div>
+
+          {job.roleSummary && (
+            <p className="mt-5 max-w-5xl text-base leading-7 text-slate-500">
+              {job.roleSummary}
+            </p>
+          )}
+
+          <div className="mt-6 flex flex-wrap items-center gap-4">
             {skillsPct != null && (
-              <span className="rounded-xl bg-slate-100 px-3.5 py-2 text-md font-bold text-slate-950">
-                {skillsPct}% Skills
-              </span>
+              <Badge className="rounded-xl border-0 bg-slate-100 px-3 py-2 text-base text-black">
+                <strong>{skillsPct}%</strong> Skills
+              </Badge>
             )}
             {projectsPct != null && (
-              <span className="rounded-xl bg-slate-100 px-3.5 py-2 text-md font-bold text-slate-950">
-                {projectsPct}% Projects
-              </span>
+              <Badge className="rounded-xl border-0 bg-slate-100 px-3 py-2 text-base text-black">
+                <strong>{projectsPct}%</strong> Projects
+              </Badge>
             )}
           </div>
-        )}
-      </section>
+        </CardContent>
+      </Card>
 
       {profile ? (
         <JobFitSections
@@ -323,37 +368,10 @@ function JobDetailView({
         />
       ) : (
         skills.length > 0 && (
-          <section className="rounded-2xl bg-white p-8 sm:p-10">
-            <h2 className="mb-6 text-md font-bold uppercase tracking-tight text-slate-500">
-              Skills
-            </h2>
-            <div className="flex flex-wrap gap-2">
-              {skills.map((s, i) => (
-                <span
-                  key={i}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-base font-medium text-slate-700"
-                >
-                  {s}
-                </span>
-              ))}
-            </div>
-          </section>
+          <SkillsCard
+            skills={skills.map((skill) => ({ skill, matched: false }))}
+          />
         )
-      )}
-
-      <section className="rounded-2xl bg-white p-8 sm:p-10">
-        <Rounds rounds={job.rounds} job={job} profile={profile} />
-      </section>
-
-      {job.fullJobDescription && (
-        <section className="rounded-2xl bg-white p-8 sm:p-10">
-          <h2 className="mb-6 text-md font-bold uppercase tracking-tight text-slate-500">
-            Full job description
-          </h2>
-          <p className="max-w-3xl whitespace-pre-wrap text-base leading-[1.7] text-slate-700">
-            {job.fullJobDescription}
-          </p>
-        </section>
       )}
     </div>
   );
@@ -370,6 +388,64 @@ function sourcePostingMeta(sourceUrl: string | null): {
     return { icon: "N", iconClass: "bg-[#275df5]" };
   }
   return { icon: "↗", iconClass: "bg-slate-950" };
+}
+
+function MatchScoreRing({ score }: { score: number | undefined }) {
+  return (
+    <div className="flex size-12 items-center justify-center rounded-full border-[2px] border-emerald-500 text-md font-extrabold text-black">
+      {score == null ? "—" : `${score}%`}
+    </div>
+  );
+}
+
+function SkillsCard({
+  skills,
+}: {
+  skills: { skill: string; matched: boolean }[];
+}) {
+  const sortedSkills = [
+    ...skills.filter((skill) => skill.matched),
+    ...skills.filter((skill) => !skill.matched),
+  ];
+
+  return (
+    <Card className="rounded-2xl border-0 bg-white">
+      <CardContent className="p-5 sm:p-6">
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <h2 className="text-md font-extrabold uppercase tracking-tight text-slate-500">
+            Skills
+          </h2>
+          <Button
+            variant="ghost"
+            size="auto"
+            className="border-transparent text-md font-bold text-slate-500 hover:text-slate-700"
+          >
+            + Add Skills
+          </Button>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          {sortedSkills.map((s, i) => (
+            <Badge
+              key={i}
+              className={
+                "inline-flex items-center gap-2 rounded-xl border-0 px-3 py-2 text-base font-semibold " +
+                (s.matched
+                  ? "bg-amber-50 text-orange-600"
+                  : "bg-slate-100 text-black")
+              }
+            >
+              {s.matched && (
+                <span className="flex size-5 items-center justify-center rounded bg-[#11bf2a] text-md text-white">
+                  ✓
+                </span>
+              )}
+              {s.skill}
+            </Badge>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 // Skills chips + the three fit accordions (Requirements / Responsibilities /
@@ -396,42 +472,25 @@ function JobFitSections({
 
   return (
     <>
-      {skills.length > 0 && (
-        <section className="rounded-2xl bg-white p-8 sm:p-10">
-          <h2 className="mb-6 text-md font-bold uppercase tracking-tight text-slate-500">
-            Skills
-          </h2>
-          <div className="flex flex-wrap gap-2">
-            {sortedSkills.map((s, i) => (
-              <span
-                key={i}
-                className={
-                  "inline-flex items-center rounded-lg px-3 py-2 text-base font-semibold " +
-                  (s.matched
-                    ? "bg-amber-50 text-orange-600"
-                    : "bg-slate-100 text-slate-950")
-                }
-              >
-                {s.skill}
-              </span>
-            ))}
-          </div>
-        </section>
-      )}
+      {skills.length > 0 && <SkillsCard skills={sortedSkills} />}
 
       {loading && (
-        <section className="rounded-2xl bg-white p-8 sm:p-10">
-          <p className="flex items-center gap-2 text-base font-semibold text-slate-500">
-            <Loader2 size={15} className="animate-spin" /> Analyzing your resume
-            against this role…
-          </p>
-        </section>
+        <Card className="rounded-2xl border-0 bg-white">
+          <CardContent className="p-5 sm:p-6">
+            <p className="flex items-center gap-2 text-base font-semibold text-slate-500">
+              <Loader2 size={15} className="animate-spin" /> Analyzing your
+              resume against this role…
+            </p>
+          </CardContent>
+        </Card>
       )}
 
       {error && !loading && (
-        <section className="rounded-2xl bg-white p-8 sm:p-10">
-          <p className="text-base text-rose-600">{error}</p>
-        </section>
+        <Card className="rounded-2xl border-0 bg-white">
+          <CardContent className="p-5 sm:p-6">
+            <p className="text-base text-rose-600">{error}</p>
+          </CardContent>
+        </Card>
       )}
 
       {analysis && !loading && (
@@ -439,18 +498,9 @@ function JobFitSections({
           <FitAccordion
             title="Responsibilities"
             section={analysis.responsibilities}
-            defaultOpen
           />
-          <FitAccordion
-            title="Requirements"
-            section={analysis.requirements}
-            defaultOpen
-          />
-          <FitAccordion
-            title="Nice to have"
-            section={analysis.niceToHaves}
-            defaultOpen
-          />
+          <FitAccordion title="Requirements" section={analysis.requirements} />
+          <FitAccordion title="Nice to have" section={analysis.niceToHaves} />
         </>
       )}
     </>
@@ -476,12 +526,12 @@ function FitAccordion({
       className="rounded-2xl bg-white"
     >
       <AccordionItem value="content" className="border-b-0">
-        <AccordionTrigger className="px-8 py-7 text-left hover:no-underline sm:px-10 [&>svg]:text-slate-950">
+        <AccordionTrigger className="px-5 py-5 text-left hover:no-underline sm:px-6 [&>svg]:text-slate-950">
           <h2 className="text-md font-bold uppercase tracking-tight text-slate-500">
             {title}
           </h2>
         </AccordionTrigger>
-        <AccordionContent className="space-y-7 px-8 pb-8 sm:px-10">
+        <AccordionContent className="space-y-5 px-5 pb-5 sm:px-6">
           <FitGroup
             label="Strong Match"
             items={section.items.filter((item) => item.status === "found")}
@@ -551,42 +601,36 @@ function Rounds({
   profile: OnboardingProfile | null;
 }) {
   return (
-    <section>
-      <div className="mb-6 flex items-end justify-between">
-        <h2 className="text-md font-bold uppercase tracking-tight text-slate-500">
-          Interview process
-        </h2>
-        <span className="text-sm font-bold uppercase tracking-[0.18em] text-slate-500">
-          {rounds.length} Rounds
-        </span>
-      </div>
-      <ol className="relative space-y-7">
-        <span
-          aria-hidden
-          className="absolute left-3.5 top-3 bottom-3 w-px bg-slate-200"
-        />
-        {rounds.map((r, i) => (
-          <RoundItem
-            key={r.position}
-            round={r}
-            isFirst={i === 0}
-            job={job}
-            profile={profile}
+    <Card className="rounded-[34px] border-0 bg-[linear-gradient(180deg,#100629_0%,#32157A_100%)]">
+      <CardContent className="px-5 py-8 sm:px-6">
+        <ol className="relative space-y-10">
+          <span
+            aria-hidden
+            className="absolute left-8 top-8 bottom-8 w-[3px] rounded-full bg-[#6D47F4]/45"
           />
-        ))}
-      </ol>
-    </section>
+          {rounds.map((r, i) => (
+            <RoundItem
+              key={r.position}
+              round={r}
+              index={i}
+              job={job}
+              profile={profile}
+            />
+          ))}
+        </ol>
+      </CardContent>
+    </Card>
   );
 }
 
 function RoundItem({
   round,
-  isFirst,
+  index,
   job,
   profile,
 }: {
   round: Round;
-  isFirst: boolean;
+  index: number;
   job: JobDetail["job"];
   profile: OnboardingProfile | null;
 }) {
@@ -601,9 +645,11 @@ function RoundItem({
   } | null>(null);
 
   const mins = ROUND_MINUTES[round.slug] ?? 10;
+  const roundNumber = index + 1;
 
-  async function startInterview() {
-    if (!questions || questions.length === 0) return;
+  async function startInterview(nextQuestions?: GeneratedQuestion[]) {
+    const activeQuestions = nextQuestions ?? questions;
+    if (!activeQuestions || activeQuestions.length === 0) return;
     setStarting(true);
     setStartError(null);
     try {
@@ -615,7 +661,7 @@ function RoundItem({
         jobId: job.jobId,
         roundSlug: round.slug,
         roundTitle: round.title,
-        questions,
+        questions: activeQuestions,
         candidateName: profile?.name,
         jobTitle: job.jobTitle,
         userDetails: buildUserDetails(profile, job),
@@ -636,7 +682,7 @@ function RoundItem({
     }
   }
 
-  async function generate() {
+  async function generate(): Promise<GeneratedQuestion[]> {
     setLoading(true);
     setGenError(null);
     try {
@@ -661,106 +707,139 @@ function RoundItem({
           : {}),
       });
       if (result.error) throw new Error(result.error);
-      setQuestions(result.questions ?? []);
+      const generatedQuestions = result.questions ?? [];
+      setQuestions(generatedQuestions);
+      return generatedQuestions;
     } catch (e) {
       setGenError(
         e instanceof Error ? e.message : "Failed to generate questions.",
       );
+      return [];
     } finally {
       setLoading(false);
     }
   }
 
+  async function startRound() {
+    if (loading || starting || !questions?.length) return;
+    await startInterview(questions);
+  }
+
+  const hasGeneratedQuestions = Boolean(questions?.length);
+
   return (
-    <li className="relative flex gap-5">
-      <span
-        className={
-          "relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold " +
-          (isFirst
-            ? "bg-slate-900 text-white"
-            : "border border-slate-200 bg-white text-slate-500")
-        }
-      >
-        {round.position}
+    <li className="relative grid grid-cols-[72px_1fr] gap-x-5">
+      <span className="relative z-10 flex size-11 shrink-0 items-center justify-center rounded-full bg-[#6D47F4] text-base font-bold text-white">
+        {roundNumber === 1 ? roundNumber : <Phone size={20} />}
       </span>
       <div className="min-w-0 flex-1">
-        <p className="text-[15px] font-bold text-slate-900">{round.title}</p>
-        <p className="mt-0.5 text-[11px] font-bold uppercase tracking-[0.18em] text-indigo-500">
-          {mins} MIN
-        </p>
-        {round.competencies.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {round.competencies.map((c, ci) => (
-              <span
-                key={ci}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-medium text-slate-700"
-              >
-                {c}
-              </span>
-            ))}
-          </div>
-        )}
-
-        <div className="mt-4">
-          {questions === null && !loading && (
-            <button
-              onClick={generate}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-900 px-4 text-[13px] font-bold uppercase tracking-[0.18em] text-white hover:bg-slate-700 active:bg-slate-800"
-            >
-              <Sparkles size={13} />
-              Generate questions
-            </button>
-          )}
-
-          {loading && (
-            <p className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-indigo-500">
-              <Loader2 size={13} className="animate-spin" />
-              Generating…
-            </p>
-          )}
-
-          {genError && <p className="text-[13px] text-rose-600">{genError}</p>}
-
-          {questions !== null && questions.length > 0 && (
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <ol className="space-y-3">
-                {questions.map((q, qi) => (
-                  <li key={q.id} className="flex gap-3">
-                    <span className="mt-0.5 text-[11px] font-bold tabular-nums text-indigo-500">
-                      {String(qi + 1).padStart(2, "0")}
-                    </span>
-                    <span className="text-[14px] leading-[1.6] text-slate-700">
-                      {q.text}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-              <div className="mt-5 flex items-center gap-4">
-                <button
-                  onClick={startInterview}
-                  disabled={starting}
-                  className="inline-flex h-10 items-center gap-2 rounded-lg bg-indigo-600 px-4 text-[13px] font-bold uppercase tracking-[0.18em] text-white hover:bg-indigo-700 active:bg-indigo-800 disabled:opacity-60"
-                >
-                  {starting ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Phone size={13} />
-                  )}
-                  {starting ? "Starting…" : "Start interview"}
-                </button>
-                <button
-                  onClick={generate}
-                  className="text-[12px] font-bold uppercase tracking-[0.18em] text-indigo-600 hover:text-indigo-800"
-                >
-                  Regenerate
-                </button>
-              </div>
-              {startError && (
-                <p className="mt-3 text-[13px] text-rose-600">{startError}</p>
-              )}
-            </div>
-          )}
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <p className="text-base font-extrabold uppercase tracking-[0.16em] text-[#31E747]">
+            Round {roundNumber}
+          </p>
+          <Badge className="rounded-full border border-white/20 bg-white/10 px-5 py-2 text-base font-bold text-white">
+            {mins} min
+          </Badge>
         </div>
+
+        <Card className="rounded-2xl border border-white/80 bg-white p-5 text-black">
+          <CardContent className="p-0">
+            <div className="flex items-start justify-between gap-5">
+              <div className="min-w-0">
+                <h3 className="text-lg font-semibold">{round.title}</h3>
+                <p className="mt-3 max-w-4xl text-base text-slate-500">
+                  {getRoundDescription(round)}
+                </p>
+              </div>
+            </div>
+
+            {genError && (
+              <p className="mt-4 text-base text-rose-600">{genError}</p>
+            )}
+
+            <div className="mt-8 space-y-6">
+              {round.competencies.length > 0 && (
+                <div>
+                  <p className="text-base font-bold text-slate-500">
+                    Questions may cover
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {round.competencies.map((c, ci) => (
+                      <Badge
+                        key={ci}
+                        className="rounded-xl border-0 bg-slate-100 px-3 py-2 text-base text-black"
+                      >
+                        {c}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {hasGeneratedQuestions && questions ? (
+                <Accordion
+                  type="single"
+                  collapsible
+                  defaultValue="generated-questions"
+                  className="rounded-2xl border border-slate-200 bg-slate-50"
+                >
+                  <AccordionItem
+                    value="generated-questions"
+                    className="border-b-0"
+                  >
+                    <AccordionTrigger className="px-4 py-3 text-left text-md font-bold text-slate-900 hover:no-underline">
+                      Generated questions
+                    </AccordionTrigger>
+                    <AccordionContent className="px-4 pb-4">
+                      <ol className="space-y-3">
+                        {questions.map((question, questionIndex) => (
+                          <li
+                            key={question.id}
+                            className="flex gap-3 text-base leading-7 text-slate-600"
+                          >
+                            <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-white text-xs font-bold text-slate-500">
+                              {questionIndex + 1}
+                            </span>
+                            <span>{question.text}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
+              ) : null}
+
+              <div className="flex justify-end">
+                <Button
+                  variant="accent"
+                  size="lg"
+                  onClick={hasGeneratedQuestions ? startRound : generate}
+                  disabled={starting || loading}
+                  className="w-full gap-3 rounded-full border-transparent bg-[linear-gradient(90deg,#5B37C8_0%,#6D47F4_100%)] px-6 text-md font-bold text-white hover:opacity-95 lg:w-56"
+                >
+                  {starting || loading ? (
+                    <Loader2 size={20} className="animate-spin" />
+                  ) : hasGeneratedQuestions ? (
+                    <Play size={18} fill="currentColor" />
+                  ) : (
+                    <Sparkles size={18} />
+                  )}
+                  {starting
+                    ? "Starting…"
+                    : loading
+                      ? "Generating…"
+                      : hasGeneratedQuestions
+                        ? `Start Round ${roundNumber}`
+                        : "Generate questions"}
+                </Button>
+              </div>
+            </div>
+
+            {startError && (
+              <p className="mt-4 text-base text-rose-600">{startError}</p>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {session && (
@@ -774,4 +853,15 @@ function RoundItem({
       )}
     </li>
   );
+}
+
+function getRoundDescription(round: Round) {
+  if (round.competencies.length > 0) {
+    return `Evaluates ${round.competencies
+      .slice(0, 3)
+      .join(", ")
+      .toLowerCase()} for this role.`;
+  }
+
+  return "This round evaluates your role readiness through focused interview questions.";
 }

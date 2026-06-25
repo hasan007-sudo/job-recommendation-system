@@ -17,6 +17,7 @@ import {
 } from "livekit-client";
 import { Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "../shadcn/button";
 
 interface InterviewSessionProps {
   token: string;
@@ -175,11 +176,11 @@ function SessionLayout({
       <header className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white/70 px-6 py-4 backdrop-blur">
         <div>
           {jobTitle && (
-            <p className="text-[15px] font-bold tracking-tight text-slate-900">
+            <p className="text-md font-bold tracking-tight text-slate-900">
               {jobTitle}
             </p>
           )}
-          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-indigo-500">
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-indigo-500">
             {roundTitle}
           </p>
         </div>
@@ -211,27 +212,27 @@ function SessionLayout({
         </div>
 
         <div className="text-center">
-          <p className="text-[20px] font-bold tracking-tight text-slate-900">
+          <p className="text-xl font-bold tracking-tight text-slate-900">
             Sara
           </p>
-          <p className="mt-1 text-[12px] font-bold uppercase tracking-[0.18em] text-slate-400">
+          <p className="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
             {STATE_LABEL[state] ?? "Interviewer"}
           </p>
         </div>
 
         {activeQuestion && !isConnecting && (
           <div className="max-w-xl rounded-xl border border-slate-200 bg-white p-5 text-center">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-indigo-500">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-indigo-500">
               Question {askedQuestions.length}
             </p>
-            <p className="mt-2 text-[16px] leading-[1.6] text-slate-900">
+            <p className="mt-2 text-base leading-[1.6] text-slate-900">
               {activeQuestion}
             </p>
           </div>
         )}
 
         {latestMessage && !isConnecting && (
-          <p className="max-w-lg text-center text-[15px] leading-[1.6] text-slate-500">
+          <p className="max-w-lg text-center text-md leading-[1.6] text-slate-500">
             {latestMessage}
           </p>
         )}
@@ -239,10 +240,11 @@ function SessionLayout({
 
       {/* Controls */}
       <footer className="flex shrink-0 items-center justify-center gap-3 border-t border-slate-200 bg-white px-6 py-6">
-        <button
+        <Button
+          variant="outline"
           onClick={toggleMic}
           className={
-            "inline-flex h-12 items-center gap-2 rounded-lg border px-5 text-[13px] font-bold uppercase tracking-[0.18em] transition-colors " +
+            "rounded-lg px-5 text-sm font-bold uppercase tracking-[0.18em] transition-colors " +
             (isMicrophoneEnabled
               ? "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
               : "border-slate-300 bg-slate-100 text-slate-500 hover:bg-slate-200")
@@ -250,14 +252,14 @@ function SessionLayout({
         >
           {isMicrophoneEnabled ? <Mic size={15} /> : <MicOff size={15} />}
           {isMicrophoneEnabled ? "Mute" : "Unmute"}
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={endSession}
-          className="inline-flex h-12 items-center gap-2 rounded-lg bg-slate-900 px-5 text-[13px] font-bold uppercase tracking-[0.18em] text-white hover:bg-slate-700 active:bg-slate-800"
+          className="rounded-lg bg-slate-900 px-5 text-sm font-bold uppercase tracking-[0.18em] text-white hover:bg-slate-700 active:bg-slate-800"
         >
           <PhoneOff size={15} />
           End interview
-        </button>
+        </Button>
       </footer>
     </div>
   );
@@ -282,7 +284,7 @@ function SessionTimer() {
   }, []);
 
   return (
-    <span className="text-[14px] tabular-nums tracking-widest text-slate-500">
+    <span className="text-sm tabular-nums tracking-widest text-slate-500">
       {elapsed}
     </span>
   );
