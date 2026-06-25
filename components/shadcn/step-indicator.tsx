@@ -2,7 +2,7 @@ import { cn } from "../../lib/utils";
 
 export function StepIndicator({ current, total }: { current: number; total: number }) {
   return (
-    <div className="flex items-center gap-3 [font-family:var(--font-mono)] text-[10px] tracking-[0.22em] text-[var(--ink-mute)]">
+    <div className="flex items-center gap-3 [font-family:var(--font-mono)] text-xs tracking-[0.22em] text-[var(--ink-mute)]">
       <span className="tabular-nums">
         {String(current).padStart(2, "0")}
         <span className="mx-1 text-[var(--rule)]">/</span>

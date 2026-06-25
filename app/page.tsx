@@ -1,46 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Loader2, X } from "lucide-react";
+import { Badge } from "../components/shadcn/badge";
+import { Button } from "../components/shadcn/button";
+import { Card, CardContent } from "../components/shadcn/card";
+import { Input } from "../components/shadcn/input";
+import { Textarea } from "../components/shadcn/textarea";
+import {
+  type JobCard,
+  type SearchInput,
+  type SortMode,
+  useJobOptions,
+  useJobSearch,
+} from "../hooks/use-job-search";
 import { buildProjectTexts, type OnboardingProfile } from "../lib/onboarding";
-import type { ParsedRound } from "../lib/rounds";
 import { formatExperience, tierFor } from "../lib/display";
-import { getJson, postJson } from "../lib/api";
-
-type Skill = { name: string };
-
-type JobCard = {
-  jobId: string;
-  jobTitle: string;
-  companyName: string;
-  seniority: string;
-  experienceMinYears: number | null;
-  experienceMaxYears: number | null;
-  roundCount: number;
-  rounds: ParsedRound[];
-  score: number | null;
-  skillsPct: number | null;
-  projectsPct: number | null;
-  roleOrCompanyMatched: boolean;
-  matchedSkills: number | null;
-  totalSkills: number;
-};
-
-type SortMode = "default" | "score";
-
-type SearchInput = {
-  companyText: string;
-  roleText: string;
-  // Skills with their parse-time glosses (embedding input for semantic
-  // coverage). Manually typed skills have no gloss → exact token match only.
-  skills: { name: string; gloss?: string }[];
-  experienceMinYears: number | null;
-  experienceMaxYears: number | null;
-  projectTexts: string[];
-  sort: SortMode;
-};
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -68,21 +44,10 @@ export default function HomePage() {
   // on back-navigation), request dedupe, and no stale data on filter change.
   const [searchInput, setSearchInput] = useState<SearchInput | null>(null);
 
-  const optionsQuery = useQuery({
-    queryKey: ["options"],
-    queryFn: () => getJson<{ skills: Skill[] }>("/api/options"),
-  });
+  const optionsQuery = useJobOptions();
   const skills = optionsQuery.data?.skills ?? [];
 
-  const searchQuery = useQuery({
-    queryKey: ["search", searchInput],
-    queryFn: () => postJson<{ cards: JobCard[] }>("/api/search", searchInput!),
-    enabled: searchInput != null,
-    // Dedupe the overlapping/duplicate fires (StrictMode, remounts) and serve
-    // cache on back-navigation. No placeholderData on purpose: a new queryKey
-    // yields undefined until resolved, so we show loading — never stale data.
-    staleTime: 60_000,
-  });
+  const searchQuery = useJobSearch(searchInput);
 
   const cards = searchQuery.data?.cards ?? null;
   const loading = searchInput != null && searchQuery.isPending;
@@ -273,16 +238,18 @@ export default function HomePage() {
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-2">
             <div className="h-6 w-6 rounded-md bg-slate-900" />
-            <span className="text-[15px] font-bold tracking-tight text-slate-900">
+            <span className="text-md font-bold tracking-tight text-slate-900">
               Rounds
             </span>
           </div>
-          <button
+          <Button
+            variant="ghost"
+            size="auto"
             onClick={() => router.push("/onboarding")}
             className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 hover:text-slate-900"
           >
             Edit resume
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -295,46 +262,46 @@ export default function HomePage() {
             />
 
             <div className="space-y-5">
-              <h1 className="text-[22px] font-bold tracking-tight text-slate-900">
+              <h1 className="text-xl font-bold tracking-tight text-slate-900">
                 Find your next round
               </h1>
 
               <Field label="Role">
-                <input
+                <Input
                   value={roleText}
                   onChange={(e) => setRoleText(e.target.value)}
                   placeholder="e.g. Frontend Engineer, SDE"
-                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[14px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
+                  className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-indigo-500"
                 />
               </Field>
 
               <Field label="Company">
-                <input
+                <Input
                   value={companyText}
                   onChange={(e) => setCompanyText(e.target.value)}
                   placeholder="e.g. Google, Amazon (comma-separated)"
-                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[14px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
+                  className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-indigo-500"
                 />
               </Field>
 
               <Field label="Years of experience">
                 <div className="flex items-center gap-2">
-                  <input
+                  <Input
                     type="number"
                     min="0"
                     value={experienceMin}
                     onChange={(e) => setExperienceMin(e.target.value)}
                     placeholder="Min"
-                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[14px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
+                    className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-indigo-500"
                   />
-                  <span className="text-[14px] text-slate-400">–</span>
-                  <input
+                  <span className="text-sm text-slate-400">–</span>
+                  <Input
                     type="number"
                     min="0"
                     value={experienceMax}
                     onChange={(e) => setExperienceMax(e.target.value)}
                     placeholder="Max"
-                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[14px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
+                    className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-indigo-500"
                   />
                 </div>
               </Field>
@@ -342,25 +309,28 @@ export default function HomePage() {
               <Field label="Key skills">
                 <div className="flex flex-wrap gap-1.5">
                   {skillNames.map((s) => (
-                    <span
+                    <Badge
                       key={s}
-                      className="inline-flex items-center gap-1.5 rounded-md bg-indigo-500 px-2.5 py-1 text-[12px] font-medium text-white"
+                      variant="accent"
+                      className="rounded-md border-0 bg-indigo-500 px-2.5 py-1 text-xs text-white"
                     >
                       {s}
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="auto"
                         onClick={() =>
                           setSkillNames((cur) => cur.filter((x) => x !== s))
                         }
                         aria-label={`remove ${s}`}
-                        className="text-white/80 hover:text-white"
+                        className="border-0 text-white/80 hover:text-white"
                       >
                         <X size={12} strokeWidth={2.5} />
-                      </button>
-                    </span>
+                      </Button>
+                    </Badge>
                   ))}
                 </div>
                 <div className="relative mt-2">
-                  <input
+                  <Input
                     value={skillSearch}
                     onChange={(e) => setSkillSearch(e.target.value)}
                     onKeyDown={(e) => {
@@ -370,18 +340,20 @@ export default function HomePage() {
                       }
                     }}
                     placeholder="Search or add a skill"
-                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[14px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
+                    className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-indigo-500"
                   />
                   {filteredSkills.length > 0 && (
                     <div className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-sm">
                       {filteredSkills.map((s) => (
-                        <button
+                        <Button
                           key={s.name}
+                          variant="ghost"
+                          size="auto"
                           onClick={() => addSkill(s.name)}
-                          className="block w-full px-3 py-2 text-left text-[13px] hover:bg-indigo-50"
+                          className="block w-full rounded-none border-0 px-3 py-2 text-left text-sm hover:bg-indigo-50"
                         >
                           {s.name}
-                        </button>
+                        </Button>
                       ))}
                     </div>
                   )}
@@ -389,35 +361,36 @@ export default function HomePage() {
               </Field>
 
               <Field label="Projects skills">
-                <textarea
+                <Textarea
                   value={projectTexts.join(", ")}
                   onChange={(e) =>
                     setProjectTexts(e.target.value ? [e.target.value] : [])
                   }
                   placeholder="Describe your projects — what you built and the tech used"
                   rows={4}
-                  className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-[14px] leading-[1.5] outline-none placeholder:text-slate-400 focus:border-indigo-500"
+                  className="rounded-lg border-slate-200 bg-white text-sm leading-[1.5] focus:border-indigo-500"
                 />
               </Field>
 
-              <button
+              <Button
                 onClick={updateResults}
                 disabled={loading}
-                className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-slate-900 text-[14px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+                size="lg"
+                className="w-full rounded-lg bg-slate-900 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               >
                 {loading ? (
                   <Loader2 size={16} className="animate-spin" />
                 ) : null}
                 {loading ? "Searching…" : "Update results"}
-              </button>
+              </Button>
 
-              {error && <p className="text-[13px] text-rose-600">{error}</p>}
+              {error && <p className="text-sm text-rose-600">{error}</p>}
             </div>
           </aside>
 
           <section>
             <div className="mb-5 flex items-end justify-between">
-              <h2 className="text-[13px] font-bold uppercase tracking-[0.18em] text-slate-500">
+              <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-slate-500">
                 {loading
                   ? "Searching jobs…"
                   : cards === null
@@ -432,19 +405,21 @@ export default function HomePage() {
                       ["score", "Match score (With skills)"],
                     ] as [SortMode, string][]
                   ).map(([value, label]) => (
-                    <button
+                    <Button
                       key={value}
+                      variant={sort === value ? "default" : "ghost"}
+                      size="auto"
                       onClick={() => changeSort(value)}
                       disabled={loading}
                       className={
-                        "rounded-md px-3 py-1.5 text-[12px] font-semibold transition disabled:opacity-60 " +
+                        "rounded-md px-3 py-1.5 text-xs font-semibold transition disabled:opacity-60 " +
                         (sort === value
                           ? "bg-slate-900 text-white"
-                          : "text-slate-500 hover:text-slate-900")
+                          : "border-0 text-slate-500 hover:text-slate-900")
                       }
                     >
                       {label}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               )}
@@ -497,22 +472,26 @@ function ActiveResumeCard({
 }) {
   if (!profile) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-5">
+      <Card className="rounded-2xl border-dashed border-slate-300 bg-white">
+        <CardContent className="p-5">
         <div className="flex items-center justify-between">
-          <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
+          <span className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
             Active resume
           </span>
-          <button
+          <Button
+            variant="link"
+            size="auto"
             onClick={onEdit}
-            className="text-[12px] font-semibold text-indigo-600"
+            className="text-xs font-semibold text-indigo-600"
           >
             Upload
-          </button>
+          </Button>
         </div>
-        <p className="mt-3 text-[13px] text-slate-500">
+        <p className="mt-3 text-sm text-slate-500">
           Upload your resume to see match percentages.
         </p>
-      </div>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -522,35 +501,39 @@ function ActiveResumeCard({
     .join(" · ");
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5">
+    <Card className="rounded-2xl border-slate-200 bg-white">
+      <CardContent className="p-5">
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
+        <span className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
           Active resume
         </span>
-        <button
+        <Button
+          variant="link"
+          size="auto"
           onClick={onEdit}
-          className="text-[12px] font-semibold text-indigo-600"
+          className="text-xs font-semibold text-indigo-600"
         >
           Edit
-        </button>
+        </Button>
       </div>
-      <p className="text-[16px] font-bold text-slate-900">
+      <p className="text-base font-bold text-slate-900">
         {profile.name || "Your resume"}
       </p>
-      {eduLine && <p className="mt-1 text-[13px] text-slate-500">{eduLine}</p>}
+      {eduLine && <p className="mt-1 text-sm text-slate-500">{eduLine}</p>}
       {/* {profile.skills && profile.skills.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {profile.skills.map((s) => (
             <span
               key={s}
-              className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-800"
+              className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-800"
             >
               {s}
             </span>
           ))}
         </div>
       )} */}
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -563,7 +546,7 @@ function Field({
 }) {
   return (
     <div>
-      <div className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
+      <div className="mb-1.5 text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
         {label}
       </div>
       {children}
@@ -573,10 +556,12 @@ function Field({
 
 function EmptyState({ title, body }: { title: string; body: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
-      <p className="text-[15px] font-bold text-slate-900">{title}</p>
-      <p className="mt-1 text-[13px] text-slate-500">{body}</p>
-    </div>
+    <Card className="rounded-2xl border-dashed border-slate-300 bg-white text-center">
+      <CardContent className="px-6 py-10">
+      <p className="text-md font-bold text-slate-900">{title}</p>
+      <p className="mt-1 text-sm text-slate-500">{body}</p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -587,54 +572,56 @@ function JobRow({ card, onClick }: { card: JobCard; onClick: () => void }) {
     card.experienceMaxYears,
   );
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="auto"
       onClick={onClick}
       className="group flex w-full items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:border-slate-300 hover:shadow-sm"
     >
-      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-[15px] font-bold text-white">
+      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-md font-bold text-white">
         {initials(card.companyName)}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[16px] font-bold text-slate-900">
+        <p className="truncate text-base font-bold text-slate-900">
           {card.jobTitle}
         </p>
-        <p className="mt-0.5 truncate text-[13px] text-slate-500">
+        <p className="mt-0.5 truncate text-sm text-slate-500">
           {card.companyName} ·{" "}
           <span className="capitalize">{card.seniority}</span>
           {experience ? ` · ${experience}` : ""}
         </p>
         {card.matchedSkills != null && (
-          <p className="mt-1.5 text-[12px] font-semibold text-slate-400">
+          <p className="mt-1.5 text-xs font-semibold text-slate-400">
             {card.matchedSkills} / {card.totalSkills} skills matched
           </p>
         )}
       </div>
       <div className="hidden text-center sm:block">
-        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
           Rounds
         </p>
-        <p className="text-[18px] font-bold text-slate-900">
+        <p className="text-lg font-bold text-slate-900">
           {card.roundCount}
         </p>
       </div>
       <div className="relative min-w-[96px] text-right">
         {tier ? (
           <>
-            <p className={`text-[22px] font-bold leading-none ${tier.color}`}>
+            <p className={`text-xl font-bold leading-none ${tier.color}`}>
               {card.score}%
             </p>
             <p
-              className={`mt-1 text-[10px] font-bold uppercase tracking-[0.16em] ${tier.color}`}
+              className={`mt-1 text-xs font-bold uppercase tracking-[0.16em] ${tier.color}`}
             >
               {tier.label}
             </p>
           </>
         ) : (
-          <span className="text-[12px] text-slate-400">—</span>
+          <span className="text-xs text-slate-400">—</span>
         )}
         {card.score != null && (
           <div className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-44 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-md group-hover:block">
-            <p className="mb-2.5 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+            <p className="mb-2.5 text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
               Match breakdown
             </p>
             <BreakdownRow label="Required skills" value={card.skillsPct} />
@@ -642,7 +629,7 @@ function JobRow({ card, onClick }: { card: JobCard; onClick: () => void }) {
           </div>
         )}
       </div>
-    </button>
+    </Button>
   );
 }
 
@@ -655,8 +642,8 @@ function BreakdownRow({
 }) {
   return (
     <div className="flex items-center justify-between py-1">
-      <span className="text-[12px] text-slate-500">{label}</span>
-      <span className="text-[12px] font-semibold text-slate-900">
+      <span className="text-xs text-slate-500">{label}</span>
+      <span className="text-xs font-semibold text-slate-900">
         {value == null ? "—" : `${value}%`}
       </span>
     </div>

@@ -12,6 +12,13 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import { Badge } from "../../components/shadcn/badge";
+import { Button } from "../../components/shadcn/button";
+import {
+  Card as ShadcnCard,
+  CardContent,
+} from "../../components/shadcn/card";
+import { Input } from "../../components/shadcn/input";
 import {
   deriveSearchInput,
   EMPTY_PROFILE,
@@ -79,11 +86,11 @@ export default function OnboardingPage() {
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-2">
             <div className="h-6 w-6 rounded-md bg-slate-900" />
-            <span className="text-[15px] font-bold tracking-tight text-slate-900">
+            <span className="text-md font-bold tracking-tight text-slate-900">
               Rounds
             </span>
           </div>
-          <span className="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
+          <span className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">
             {step === "upload"
               ? "Step 01 / Onboarding"
               : "Step 02 / Profile review"}
@@ -133,11 +140,11 @@ function UploadStep({
   return (
     <div className="mx-auto max-w-3xl px-6 py-16">
       <label htmlFor="myfile">Select a file:</label>
-      <input type="file" id="myfile" name="myfile" />
-      <h1 className="text-[44px] font-bold leading-[1.05] tracking-tight text-slate-900">
+      <Input type="file" id="myfile" name="myfile" />
+      <h1 className="text-4xl font-bold leading-[1.05] tracking-tight text-slate-900">
         Know every interview before you walk in.
       </h1>
-      <p className="mt-4 max-w-xl text-[15px] leading-[1.6] text-slate-500">
+      <p className="mt-4 max-w-xl text-md leading-[1.6] text-slate-500">
         Drop your resume and we&apos;ll show you which roles fit, the rounds
         you&apos;ll face, and the competencies interviewers actually assess.
       </p>
@@ -155,21 +162,21 @@ function UploadStep({
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-indigo-500">
           <Upload size={20} strokeWidth={2} />
         </div>
-        <p className="mt-4 text-[16px] font-semibold text-slate-900">
+        <p className="mt-4 text-base font-semibold text-slate-900">
           Drop your resume here, or{" "}
           <span className="text-indigo-600 underline-offset-2 hover:underline">
             browse
           </span>
         </p>
-        <p className="mt-1 text-[12px] text-slate-500">
+        <p className="mt-1 text-xs text-slate-500">
           PDF, DOCX, or TXT — up to 10MB
         </p>
-        <span className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-5 text-[14px] font-semibold text-white">
+        <span className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-5 text-sm font-semibold text-white">
           Select file
         </span>
       </div>
 
-      <input
+      <Input
         ref={inputRef}
         type="file"
         accept=".pdf,.docx,.txt"
@@ -184,10 +191,10 @@ function UploadStep({
         <div className="mt-6 flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
           <FileText size={18} className="text-slate-500" />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[13.5px] font-semibold text-slate-900">
+            <p className="truncate text-sm font-semibold text-slate-900">
               {fileName}
             </p>
-            <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
+            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
               {parseState === "parsing" && "reading…"}
               {parseState === "done" && `extracted · ${parseSecs}s`}
               {parseState === "error" && (error || "couldn't parse")}
@@ -205,12 +212,14 @@ function UploadStep({
       )}
 
       <div className="mt-8 text-center">
-        <button
+        <Button
+          variant="link"
+          size="auto"
           onClick={onManual}
-          className="text-[13px] font-semibold text-indigo-600 hover:underline"
+          className="text-sm font-semibold text-indigo-600 hover:underline"
         >
           Enter details manually →
-        </button>
+        </Button>
       </div>
 
       <div className="mt-16 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -224,12 +233,14 @@ function UploadStep({
 
 function Pitch({ label, body }: { label: string; body: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-indigo-600">
+    <ShadcnCard className="rounded-xl border-slate-200 bg-white">
+      <CardContent className="p-4">
+      <p className="text-xs font-bold uppercase tracking-[0.22em] text-indigo-600">
         {label}
       </p>
-      <p className="mt-2 text-[14px] text-slate-800">{body}</p>
-    </div>
+      <p className="mt-2 text-sm text-slate-800">{body}</p>
+      </CardContent>
+    </ShadcnCard>
   );
 }
 
@@ -246,20 +257,21 @@ function ProfileStep({
     <div className="mx-auto max-w-6xl px-6 py-10">
       <div className="flex items-start justify-between gap-6">
         <div className="max-w-2xl">
-          <h1 className="text-[40px] font-bold leading-[1.05] tracking-tight text-slate-900">
+          <h1 className="text-4xl font-bold leading-[1.05] tracking-tight text-slate-900">
             Here&apos;s what we read from your resume.
           </h1>
-          <p className="mt-3 text-[15px] leading-[1.6] text-slate-500">
+          <p className="mt-3 text-md leading-[1.6] text-slate-500">
             Fix anything that looks off, then continue to start matching against
             live roles.
           </p>
         </div>
-        <button
+        <Button
           onClick={onConfirm}
-          className="inline-flex h-12 shrink-0 items-center gap-2 rounded-lg bg-slate-900 px-5 text-[14px] font-semibold text-white"
+          size="lg"
+          className="shrink-0 rounded-lg bg-slate-900 px-5 text-sm font-semibold text-white"
         >
           Confirm &amp; continue <ArrowRight size={16} />
-        </button>
+        </Button>
       </div>
 
       <div className="mt-10 grid grid-cols-1 gap-5 lg:grid-cols-2">
@@ -283,7 +295,7 @@ function ProfileStep({
                   setProfile((p) => ({ ...p, experienceMinYears: v }))
                 }
               />
-              <span className="text-[15px] text-slate-400">–</span>
+              <span className="text-md text-slate-400">–</span>
               <NumberInput
                 value={profile.experienceMaxYears}
                 placeholder="Max"
@@ -449,19 +461,21 @@ function Card({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-6">
-      <div className="mb-5 flex items-center justify-between border-b border-slate-200 pb-3">
-        <h2 className="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">
-          {title}
-        </h2>
-        {hint && (
-          <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
-            {hint}
-          </span>
-        )}
-      </div>
-      {children}
-    </section>
+    <ShadcnCard className="rounded-2xl border-slate-200 bg-white">
+      <CardContent className="p-6">
+        <div className="mb-5 flex items-center justify-between border-b border-slate-200 pb-3">
+          <h2 className="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">
+            {title}
+          </h2>
+          {hint && (
+            <span className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
+              {hint}
+            </span>
+          )}
+        </div>
+        {children}
+      </CardContent>
+    </ShadcnCard>
   );
 }
 
@@ -474,7 +488,7 @@ function FieldRow({
 }) {
   return (
     <div>
-      <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">
+      <div className="mb-1.5 text-xs font-bold uppercase tracking-[0.22em] text-slate-500">
         {label}
       </div>
       {children}
@@ -494,13 +508,13 @@ function UnderlineInput({
   big?: boolean;
 }) {
   return (
-    <input
+    <Input
       value={value}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       className={
         "block w-full border-0 border-b border-slate-200 bg-transparent pb-1.5 outline-none focus:border-indigo-500 " +
-        (big ? "text-[20px] font-bold" : "text-[15px] font-semibold")
+        (big ? "text-xl font-bold" : "text-md font-semibold")
       }
     />
   );
@@ -516,13 +530,13 @@ function NumberInput({
   onChange: (v: number) => void;
 }) {
   return (
-    <input
+    <Input
       type="number"
       min={0}
       value={value}
       placeholder={placeholder}
       onChange={(e) => onChange(Math.max(0, Math.round(Number(e.target.value) || 0)))}
-      className="block w-full border-0 border-b border-slate-200 bg-transparent pb-1.5 text-[15px] font-semibold outline-none focus:border-indigo-500"
+      className="block w-full border-0 border-b border-slate-200 bg-transparent pb-1.5 text-md font-semibold outline-none focus:border-indigo-500"
     />
   );
 }
@@ -546,23 +560,26 @@ function SkillsEditor({
     <div>
       <div className="flex flex-wrap gap-1.5">
         {items.map((s) => (
-          <span
+          <Badge
             key={s}
-            className="inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2.5 py-1 text-[12px] font-medium text-slate-800"
+            variant="outline"
+            className="rounded-md border-0 bg-slate-100 px-2.5 py-1 text-xs text-slate-800"
           >
             {s}
-            <button
+            <Button
+              variant="ghost"
+              size="auto"
               aria-label={`remove ${s}`}
               onClick={() => onChange(items.filter((x) => x !== s))}
-              className="text-slate-500 hover:text-slate-900"
+              className="border-0 text-slate-500 hover:text-slate-900"
             >
               <X size={11} strokeWidth={2.5} />
-            </button>
-          </span>
+            </Button>
+          </Badge>
         ))}
       </div>
       <div className="mt-4 flex gap-2">
-        <input
+        <Input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -572,14 +589,15 @@ function SkillsEditor({
             }
           }}
           placeholder="Add a skill (e.g. Kubernetes)"
-          className="h-10 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-[13.5px] outline-none placeholder:text-slate-400 focus:border-indigo-500"
+          className="h-10 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm placeholder:text-slate-400 focus:border-indigo-500"
         />
-        <button
+        <Button
           onClick={add}
-          className="inline-flex h-10 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-4 text-[13.5px] font-semibold text-slate-900 hover:bg-slate-100"
+          variant="outline"
+          className="rounded-lg border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-900 hover:bg-slate-100"
         >
           Add
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -598,32 +616,36 @@ function ExperienceEditor({
     <div className="divide-y divide-slate-200">
       {items.map((item, i) => (
         <div key={i} className="flex items-center gap-3 py-3">
-          <span className="w-6 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+          <span className="w-6 text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
             {String(i + 1).padStart(2, "0")}
           </span>
-          <input
+          <Input
             value={item}
             placeholder={placeholder}
             onChange={(e) =>
               onChange(items.map((v, j) => (j === i ? e.target.value : v)))
             }
-            className="flex-1 border-0 bg-transparent text-[14px] font-medium outline-none"
+            className="flex-1 border-0 bg-transparent text-sm font-medium"
           />
-          <button
+          <Button
+            variant="ghost"
+            size="auto"
             aria-label="remove"
             onClick={() => onChange(items.filter((_, j) => j !== i))}
-            className="text-slate-400 hover:text-slate-900"
+            className="border-0 text-slate-400 hover:text-slate-900"
           >
             <X size={14} />
-          </button>
+          </Button>
         </div>
       ))}
-      <button
+      <Button
+        variant="link"
+        size="auto"
         onClick={() => onChange([...items, ""])}
-        className="inline-flex items-center gap-1.5 pt-4 text-[12px] font-bold uppercase tracking-[0.18em] text-indigo-600"
+        className="pt-4 text-xs font-bold uppercase tracking-[0.18em] text-indigo-600"
       >
         <Plus size={12} strokeWidth={2.5} /> Add entry
-      </button>
+      </Button>
     </div>
   );
 }
