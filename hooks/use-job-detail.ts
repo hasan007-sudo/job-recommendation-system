@@ -19,6 +19,8 @@ export type JobDetail = {
     educationRequirement: string | null;
     requiredSkills: string | null;
     roleSummary: string | null;
+    salaryInrMinPerYear: number | null;
+    salaryInrMaxPerYear: number | null;
     sourceUrl: string | null;
     fullJobDescription: string | null;
     rounds: Round[];
