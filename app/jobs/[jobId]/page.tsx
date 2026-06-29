@@ -225,7 +225,7 @@ function JobDetailView({
                 <p className="text-md font-semibold text-slate-500">
                   {job.companyName}
                 </p>
-                <h1 className="mt-2 text-lg font-extrabold leading-[1.05] tracking-tight text-black">
+                <h1 className="mt-2 text-3xl font-extrabold leading-[1.05] tracking-tight text-black">
                   {job.jobTitle}
                 </h1>
                 {meta.length > 0 && (
@@ -299,7 +299,7 @@ function JobDetailView({
               <p className="text-md font-semibold text-slate-500">
                 {job.companyName}
               </p>
-              <h1 className="mt-2 text-lg font-extrabold leading-[1.05] tracking-tight text-black">
+              <h1 className="mt-2 text-3xl font-extrabold leading-[1.05] tracking-tight text-black">
                 {job.jobTitle}
               </h1>
               {meta.length > 0 && (
