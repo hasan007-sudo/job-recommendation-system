@@ -4,7 +4,7 @@ import { Figtree } from "next/font/google";
 import "./globals.css";
 import Providers from "./providers";
 
-const figtree = Figtree({ subsets: ["latin"], variable: "--font-sans" });
+const figtree = Figtree({ subsets: ["latin"], variable: "--font-figtree" });
 
 export const metadata: Metadata = {
   title: "Rounds — Know every interview before you walk in",

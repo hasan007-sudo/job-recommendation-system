@@ -139,8 +139,6 @@ function UploadStep({
   const inputRef = useRef<HTMLInputElement>(null);
   return (
     <div className="mx-auto max-w-3xl px-6 py-16">
-      <label htmlFor="myfile">Select a file:</label>
-      <Input type="file" id="myfile" name="myfile" />
       <h1 className="text-4xl font-bold leading-[1.05] tracking-tight text-slate-900">
         Know every interview before you walk in.
       </h1>

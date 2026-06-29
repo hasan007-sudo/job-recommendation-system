@@ -1,19 +1,12 @@
 @import "tailwindcss";
+@config "../tailwind.config.ts";
 
 @theme {
-  --text-sm: 12px;
-  --text-base: 13px;
-  --text-md: 14px;
-  --text-lg: 24px;
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
 }
 
 :root {
-  --text-sm: 12px;
-  --text-base: 13px;
-  --text-md: 14px;
-  --text-lg: 24px;
   --paper: #ffffff;
   --paper-2: #f8fafc;
   --card: #ffffff;
@@ -47,4 +40,4 @@
 }
 
 html, body { margin: 0; }
-body { font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+body { font-family: var(--font-figtree), ui-sans-serif, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
